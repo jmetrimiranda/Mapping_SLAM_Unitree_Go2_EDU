@@ -153,3 +153,19 @@ ros2 run slam_toolbox async_slam_toolbox_node --ros-args -p odom_frame:=odom -p 
 ```bash
 rviz2
 ```
+
+---
+
+## 💾 Saving the Map
+
+Once your mapping session is complete and the map looks good in RViz2, run the following command to save it. 
+
+**Note:** Always save to `/ros2_ws` to ensure the files are persisted on your host machine.
+
+**Terminal (Map Saver):**
+```bash
+ros2 run nav2_map_server map_saver_cli -f /ros2_ws/my_map_name
+```
+This will generate:
+- `my_map_name.pgm`: The occupancy grid image.
+- `my_map_name.yaml`: The map metadata (resolution, origin, etc).
