@@ -11,7 +11,6 @@ from cv_bridge import CvBridge
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
-from rclpy.qos_overriding_options import QoSOverridingOptions
 from rcl_interfaces.msg import SetParametersResult
 from tf2_ros import TransformBroadcaster
 
@@ -29,7 +28,6 @@ from ..infrastructure.webrtc import WebRTCAdapter
 logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
 
 class Go2DriverNode(Node):
     """Main Go2 driver node - entry point to the application"""
@@ -169,8 +167,7 @@ class Go2DriverNode(Node):
                 self.create_publisher(Go2State, robot_state_topic, qos_profile))
             publishers['lidar'].append(
                 self.create_publisher(
-                    PointCloud2, lidar_topic, best_effort_qos,
-                    qos_overriding_options=QoSOverridingOptions.with_default_policies()))
+                    PointCloud2, lidar_topic, best_effort_qos))
             publishers['odometry'].append(
                 self.create_publisher(Odometry, odom_topic, qos_profile))
             publishers['imu'].append(
@@ -179,12 +176,10 @@ class Go2DriverNode(Node):
             if self.config.enable_video:
                 publishers['camera'].append(
                     self.create_publisher(
-                        Image, camera_topic, best_effort_qos,
-                        qos_overriding_options=QoSOverridingOptions.with_default_policies()))
+                        Image, camera_topic, best_effort_qos))
                 publishers['camera_info'].append(
                     self.create_publisher(
-                        CameraInfo, camera_info_topic, best_effort_qos,
-                        qos_overriding_options=QoSOverridingOptions.with_default_policies()))
+                        CameraInfo, camera_info_topic, best_effort_qos))
 
             if self.config.publish_raw_voxel:
                 publishers['voxel'].append(
@@ -317,17 +312,14 @@ class Go2DriverNode(Node):
     # CycloneDDS callbacks
     def _on_cyclonedds_low_state(self, msg: LowState) -> None:
         """Processing LowState for CycloneDDS"""
-        # You can add processing for CycloneDDS here if needed
         pass
 
     def _on_cyclonedds_pose(self, msg: PoseStamped) -> None:
         """Processing pose for CycloneDDS"""
-        # You can add processing for CycloneDDS here if needed
         pass
 
     def _on_cyclonedds_lidar(self, msg: PointCloud2) -> None:
         """Processing lidar for CycloneDDS"""
-        # You can add processing for CycloneDDS here if needed
         pass
 
     async def connect_robots(self) -> None:
@@ -357,4 +349,5 @@ class Go2DriverNode(Node):
                 
             except Exception as e:
                 self.get_logger().error(f"Error in control loop for robot {robot_id}: {e}")
-                raise 
+                raise
+

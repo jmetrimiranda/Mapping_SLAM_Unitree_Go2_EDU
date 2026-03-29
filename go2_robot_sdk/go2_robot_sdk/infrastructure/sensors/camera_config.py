@@ -25,7 +25,7 @@ class CameraConfigLoader:
         self.package_name = package_name
         self._camera_info_cache: Optional[Dict[int, CameraInfo]] = None
     
-    def get_supported_resolutions(self) -> list[int]:
+    def get_supported_resolutions(self) -> list:
         """Get list of supported camera resolutions"""
         try:
             calibration_dir = os.path.join(

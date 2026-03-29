@@ -125,8 +125,8 @@ void LidarToPointCloudNode::setupSubscriptions()
 {
   // Setup QoS profile for high-frequency data
   auto qos = rclcpp::QoS(1)
-    .reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    .history(rclcpp::HistoryPolicy::KeepLast);
+    .reliability(rmw_qos_reliability_policy_t::RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+    .history(rmw_qos_history_policy_t::RMW_QOS_POLICY_HISTORY_KEEP_LAST);
   
   if (config_.robot_ip_list.size() == 1) {
     // Single robot mode
@@ -153,8 +153,8 @@ void LidarToPointCloudNode::setupSubscriptions()
 void LidarToPointCloudNode::setupPublishers()
 {
   auto qos = rclcpp::QoS(1)
-    .reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    .history(rclcpp::HistoryPolicy::KeepLast);
+    .reliability(rmw_qos_reliability_policy_t::RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+    .history(rmw_qos_history_policy_t::RMW_QOS_POLICY_HISTORY_KEEP_LAST);
   
   pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     "/pointcloud/aggregated", qos

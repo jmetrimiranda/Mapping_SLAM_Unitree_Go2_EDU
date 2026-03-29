@@ -84,8 +84,8 @@ AggregatorConfig PointCloudAggregatorNode::loadConfiguration()
 void PointCloudAggregatorNode::setupSubscriptions()
 {
   auto qos = rclcpp::QoS(5)
-    .reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    .history(rclcpp::HistoryPolicy::KeepLast);
+    .reliability(rmw_qos_reliability_policy_t::RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+    .history(rmw_qos_history_policy_t::RMW_QOS_POLICY_HISTORY_KEEP_LAST);
   
   subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
     "/pointcloud/aggregated",
@@ -97,8 +97,8 @@ void PointCloudAggregatorNode::setupSubscriptions()
 void PointCloudAggregatorNode::setupPublishers()
 {
   auto qos = rclcpp::QoS(5)
-    .reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    .history(rclcpp::HistoryPolicy::KeepLast);
+    .reliability(rmw_qos_reliability_policy_t::RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+    .history(rmw_qos_history_policy_t::RMW_QOS_POLICY_HISTORY_KEEP_LAST);
   
   filtered_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
     "/pointcloud/filtered", qos
