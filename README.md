@@ -114,3 +114,29 @@ Open 5 separate terminals inside the Docker container.
 **🟢 Terminal 5: RViz2**
     
     rviz2
+
+---
+
+## ⚡ High-Performance Mode (C++ LiDAR Decoding)
+
+If you are using a wired connection or need maximum LiDAR frequency (up to ~8Hz+), use the C++ processor to offload the CPU.
+
+### Execution Order for C++ Mode:
+
+**Terminal 1: WebRTC Driver (Raw Mode)**
+    ros2 run go2_robot_sdk go2_driver_node --ros-args -p conn_type:="webrtc" -p robot_ip:="192.168.123.161" -p enable_video:=false -p decode_lidar:=false -p publish_raw_voxel:=true
+
+**Terminal 2: C++ LiDAR Processor**
+    ros2 run lidar_processor_cpp lidar_to_pointcloud_node --ros-args -p robot_ip:="192.168.123.161"
+
+**Terminal 3: TF Publisher**
+    ros2 run tf2_ros static_transform_publisher 0.289 0.0 0.08 0.0 0.0 0.0 base_link radar
+
+**Terminal 4: PointCloud Slicer**
+    ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args -p target_frame:=radar -p min_height:=0.25 -p max_height:=0.40 -p range_min:=0.4 -p range_max:=10.0 -r cloud_in:=/point_cloud2
+
+**Terminal 5: Async SLAM Toolbox**
+    ros2 run slam_toolbox async_slam_toolbox_node --ros-args -p odom_frame:=odom -p base_frame:=base_link -p map_frame:=map -p max_laser_range:=5.0 -p resolution:=0.05
+
+**Terminal 6: RViz2**
+    rviz2
