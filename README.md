@@ -4,21 +4,26 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
 
 ---
 
-## 🐳 Running in Docker (Recommended)
+## 🚀 Quick Start with Pre-built Image (Recommended)
 
-To avoid dependency conflicts and keep your host machine clean, this repository is designed to run inside a Docker container with NVIDIA GPU passthrough for RViz2.
+A fully configured Docker image with ROS 2 Foxy, CycloneDDS, the Go2 SDK, and all dependencies pre-installed is available on Docker Hub. **No compilation needed — just pull and run.**
 
-### 1. Host Preparation (Linux)
+### Prerequisites
 
-Allow Docker to access the host's X11 server for GUI rendering:
+- Linux (Ubuntu 20.04+ recommended)
+- Docker Engine installed ([install guide](https://docs.docker.com/engine/install/ubuntu/))
+- NVIDIA GPU + NVIDIA Container Toolkit (for RViz2 visualization)
+- Wired Ethernet connection to the Unitree Go2 EDU robot
+
+### 1. Host Preparation
+
+Allow Docker to access the display and install the NVIDIA Container Toolkit:
 
 ```bash
+# Allow GUI rendering
 xhost +local:root
-```
 
-Install the NVIDIA Container Toolkit on your host:
-
-```bash
+# Install NVIDIA Container Toolkit
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
   && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
@@ -30,18 +35,34 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Docker Compose Configuration
+### 2. Pull the Pre-built Image
 
-Create a `docker-compose.yml` file on your host to persist your workspace:
+```bash
+docker pull mirandametri/unitree-go2-slam:latest
+```
+
+> This downloads ~8 GB (compressed). The full image is ~24 GB uncompressed and includes: ROS 2 Foxy, CycloneDDS, go2_robot_sdk, slam_toolbox, pointcloud_to_laserscan, PCL, and all Python/C++ dependencies.
+
+### 3. Create the Docker Compose File
+
+Create a folder for your project and the compose file:
+
+```bash
+mkdir -p ~/unitree_slam/workspace
+cd ~/unitree_slam
+nano docker-compose.yml
+```
+
+Paste the following content:
 
 ```yaml
 version: '3.8'
 
 services:
   ros2_foxy_dev:
-    image: osrf/ros:foxy-desktop
+    image: mirandametri/unitree-go2-slam:latest
     container_name: dev_unitree_go2
-    network_mode: host      # Crucial for DDS/UDP traffic
+    network_mode: host      # Crucial for DDS/UDP traffic with the robot
     ipc: host               # Crucial for LiDAR shared memory
     pid: host
     environment:
@@ -49,8 +70,8 @@ services:
       - QT_X11_NO_MITSHM=1
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ./workspace:/ros2_ws
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw    # GUI rendering
+      - ./workspace:/ros2_ws                # Persist maps on host
     deploy:
       resources:
         reservations:
@@ -61,18 +82,29 @@ services:
     command: tail -f /dev/null
 ```
 
-Start the container and enter the bash session:
+Save with `Ctrl+O`, `Enter`, `Ctrl+X`.
+
+### 4. Start the Container
 
 ```bash
+cd ~/unitree_slam
 sudo docker compose up -d
 sudo docker exec -it dev_unitree_go2 bash
 ```
 
+You are now inside the container with everything ready. Proceed to the **Environment Setup** section below.
+
 ---
 
-## 🛠️ Compiling the SDK (Inside Docker)
+## 🛠️ Building from Source (Alternative)
 
-Once inside the container, install the Foxy dependencies and compile:
+If you prefer to build everything from scratch instead of using the pre-built image, use `osrf/ros:foxy-desktop` as the base image in the `docker-compose.yml`:
+
+```yaml
+    image: osrf/ros:foxy-desktop    # instead of mirandametri/unitree-go2-slam:latest
+```
+
+Then, inside the container, install dependencies and compile:
 
 ```bash
 apt-get update
