@@ -35,7 +35,24 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Pull the Pre-built Image
+### 2. Host Network Setup
+
+Before starting the container, configure the wired Ethernet connection to the robot **on the host**:
+
+```bash
+# Replace enx0c3796dc8be5 with YOUR adapter name (find with: ip a)
+sudo ip link set enx0c3796dc8be5 up
+sudo ip addr flush dev enx0c3796dc8be5
+sudo ip addr add 192.168.123.100/24 dev enx0c3796dc8be5
+sudo ip route add 192.168.123.0/24 dev enx0c3796dc8be5
+
+# Test connection
+ping -c 4 192.168.123.161
+```
+
+> ⚠️ **You must run this BEFORE starting any ROS 2 nodes.** If you see `No route to host` or `does not match an available interface`, the network is not configured.
+
+### 3. Pull the Pre-built Image
 
 ```bash
 docker pull mirandametri/unitree-go2-slam:cpp-decoder-v1
@@ -43,7 +60,7 @@ docker pull mirandametri/unitree-go2-slam:cpp-decoder-v1
 
 > This downloads ~8 GB (compressed). The full image is ~24 GB uncompressed and includes: ROS 2 Foxy, CycloneDDS, go2_robot_sdk, slam_toolbox, pointcloud_to_laserscan, wasmtime C API, voxel_decoder_cpp, PCL, and all Python/C++ dependencies.
 
-### 3. Create the Docker Compose File
+### 4. Create the Docker Compose File
 
 Create a folder for your project and the compose file:
 
@@ -84,7 +101,7 @@ services:
 
 Save with `Ctrl+O`, `Enter`, `Ctrl+X`.
 
-### 4. Start the Container
+### 5. Start the Container
 
 ```bash
 cd ~/unitree_slam
@@ -147,27 +164,46 @@ Paste the following content:
 # =============================================================
 
 # --- ROS 2 Foxy core ---
+# Loads the base ROS 2 installation (rcl, rclpy, rclcpp, etc.)
 source /opt/ros/foxy/setup.bash
 
 # --- CycloneDDS workspace ---
+# Loads the custom-compiled CycloneDDS and its RMW layer.
+# This replaces the default FastRTPS with CycloneDDS for better
+# compatibility with the Unitree Go2's internal DDS traffic.
 source /upgrade_dds_ws/install/setup.bash 2>/dev/null || true
 
 # --- Go2 SDK workspace ---
+# Loads the go2_robot_sdk, lidar_processor, lidar_processor_cpp,
+# go2_interfaces, and all custom message types.
 source /go2_webrtc_ws/install/setup.bash
 
 # --- Locale ---
+# Forces the C locale to avoid decimal separator issues (comma vs dot)
+# in European/Brazilian systems. LC_NUMERIC ensures that floating-point
+# parameters like "0.05" are parsed correctly by ROS 2 nodes.
 export LC_ALL=C
 export LC_NUMERIC="en_US.UTF-8"
 
 # --- DDS Domain Isolation ---
+# The Unitree Go2 robot runs its own internal ROS 2 nodes on domain 0.
+# We use domain 42 to isolate our SLAM pipeline from the robot's
+# internal traffic. Without this, you get ghost nodes and topic conflicts.
 export ROS_DOMAIN_ID=42
 
 # --- DDS Implementation ---
+# Switches from the default FastRTPS to CycloneDDS.
+# CycloneDDS handles the Go2's large UDP packets (LiDAR data) much
+# better than FastRTPS, which tends to fragment and drop them.
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # --- CycloneDDS Configuration ---
-# Replace enx0c3796dc8be5 with YOUR network interface name.
-# Find it on the HOST with: ip a | grep "192.168.123"
+# NetworkInterfaceAddress: The wired Ethernet adapter connected to the robot.
+#   Find yours with: ip a | grep "192.168.123" (on the host, before Docker)
+#   Common names: enx0c3796dc8be5, eth0, eno1
+# MaxMessageSize: 65500 bytes (max UDP payload, prevents fragmentation)
+# FragmentSize: 4000 bytes (CycloneDDS internal fragment size)
+# WhcHigh: 500kB write-cache watermark (prevents buffer overflow at 7+ Hz)
 export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>enx0c3796dc8be5</NetworkInterfaceAddress><MaxMessageSize>65500</MaxMessageSize><FragmentSize>4000</FragmentSize></General><Internal><Watermarks><WhcHigh>500kB</WhcHigh></Watermarks></Internal></Domain></CycloneDDS>"
 
 echo "ROS 2 environment configured:"
@@ -242,16 +278,18 @@ ros2 run tf2_ros static_transform_publisher \
 sleep 1
 
 # 4. PointCloud Slicer — converts 3D point cloud into 2D laser scan
+#    Adjust for your environment — see LiDAR Tuning Guide below
 ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
   -p target_frame:=utlidar_lidar \
-  -p min_height:=0.15 \
+  -p min_height:=0.20 \
   -p max_height:=0.60 \
   -p range_min:=0.5 \
-  -p range_max:=10.0 \
+  -p range_max:=8.0 \
   -r cloud_in:=/point_cloud2 &
 sleep 1
 
 # 5. SLAM — builds the 2D occupancy grid map
+#    Adjust for your environment — see LiDAR Tuning Guide below
 ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
   -p odom_frame:=odom \
   -p base_frame:=base_link \
@@ -286,6 +324,8 @@ rviz2
 4. (Optional) Click **Add** → **By display type** → **PointCloud2** → OK, then:
    - Expand **Topic** → set **Reliability Policy** to **Best Effort**
    - Set Topic to `/point_cloud2`
+   - Set **Decay Time** to `999` to accumulate points as the robot moves (builds a persistent 3D model)
+   - Set **Style** to `Points`, **Size** to `0.005` for a dense visualization
 
 To stop the pipeline, press `Ctrl+C` in Terminal 1.
 
@@ -324,10 +364,10 @@ sleep 1
 # 3. PointCloud Slicer
 ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
   -p target_frame:=utlidar_lidar \
-  -p min_height:=0.15 \
+  -p min_height:=0.20 \
   -p max_height:=0.60 \
   -p range_min:=0.5 \
-  -p range_max:=10.0 \
+  -p range_max:=8.0 \
   -r cloud_in:=/point_cloud2 &
 sleep 1
 
@@ -355,6 +395,230 @@ docker exec -it dev_unitree_go2 bash
 source /env_ros2.sh
 rviz2
 ```
+
+---
+
+## 🐢 Standard Mode — Multi-Terminal (5 Terminals)
+
+Each node runs in its own terminal for better debugging and control. Identical pipeline to Quick Mode, but you can monitor each node's output individually.
+
+> 💡 **When to use:** Debugging, parameter tuning, or when you need to restart individual nodes without killing the whole pipeline.
+
+**Run `source /env_ros2.sh` in ALL 5 terminals before starting.** For the C++ pipeline, also run `export LD_LIBRARY_PATH=/opt/wasmtime/lib:$LD_LIBRARY_PATH` in Terminals 1 and 2.
+
+### Terminal 1 — WebRTC Driver
+
+```bash
+# C++ mode (recommended):
+ros2 run go2_robot_sdk go2_driver_node --ros-args \
+  -p conn_type:="webrtc" \
+  -p robot_ip:="192.168.123.161" \
+  -p enable_video:=false \
+  -p decode_lidar:=false \
+  -p publish_raw_voxel:=true
+
+# Python mode (legacy):
+# ros2 run go2_robot_sdk go2_driver_node --ros-args \
+#   -p conn_type:="webrtc" \
+#   -p robot_ip:="192.168.123.161" \
+#   -p enable_video:=false \
+#   -p decode_lidar:=true \
+#   -p publish_raw_voxel:=false
+```
+
+### Terminal 2 — C++ Voxel Decoder (C++ mode only)
+
+```bash
+ros2 run voxel_decoder_cpp voxel_decoder_node
+```
+
+> Skip this terminal if using Python mode (`decode_lidar:=true`).
+
+### Terminal 3 — TF Publisher
+
+```bash
+ros2 run tf2_ros static_transform_publisher \
+  0.289 0.0 0.08 0.0 0.0 0.0 base_link utlidar_lidar
+```
+
+### Terminal 4 — PointCloud Slicer
+
+```bash
+ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
+  -p target_frame:=utlidar_lidar \
+  -p min_height:=0.20 \
+  -p max_height:=0.60 \
+  -p range_min:=0.5 \
+  -p range_max:=8.0 \
+  -r cloud_in:=/point_cloud2
+```
+
+### Terminal 5 — SLAM
+
+```bash
+ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
+  -p odom_frame:=odom \
+  -p base_frame:=base_link \
+  -p map_frame:=map \
+  -p max_laser_range:=8.0 \
+  -p resolution:=0.05 \
+  -p minimum_travel_distance:=0.3 \
+  -p minimum_travel_heading:=0.3
+```
+
+### Terminal 6 — RViz2
+
+```bash
+rviz2
+```
+
+Follow the same RViz2 setup instructions from the C++ mode section above.
+
+---
+
+## 🎯 LiDAR L1 Tuning Guide
+
+The Unitree Go2 EDU uses the **L1 LiDAR**, mounted **under the robot's chin** (front-bottom), approximately **8cm from the ground**. The LiDAR emits rays in all directions (up, down, and around) producing a full 3D point cloud. The `pointcloud_to_laserscan` node then filters this cloud, keeping only points within a specific height band to create the 2D scan used by SLAM.
+
+### How the 2D Scan Works
+
+The LiDAR produces a 3D point cloud covering everything around the robot. The `pointcloud_to_laserscan` node slices a horizontal band from this cloud to create a 2D scan for SLAM:
+
+![LiDAR Height Parameters](docs/lidar_height_diagram.png)
+
+**Vertical parameters** (measured from the LiDAR position, not from the ground):
+
+| Parameter | What it does | Too low | Too high |
+|---|---|---|---|
+| `min_height` | Bottom of scan band | Ground noise, robot legs visible | Misses low obstacles (steps, cables) |
+| `max_height` | Top of scan band | Misses tall objects (chairs, shelves) | Ceiling reflections, more noise |
+
+> ⚠️ **`min_height` must always be less than `max_height`.** If inverted (e.g., min=0.8, max=0.2), no points can pass the filter and the scan will be empty.
+
+**Horizontal parameters** (distance from robot center):
+
+| Parameter | What it does | Too low | Too high |
+|---|---|---|---|
+| `range_min` | Dead zone around robot | Sees own legs/body as obstacles | Misses nearby walls in corridors |
+| `range_max` | Max detection distance | Misses distant walls | Multi-path reflections, ghost points |
+
+### Environment Profiles
+
+#### 🏭 Large Industrial (factory, warehouse, power plant)
+
+Open areas, tall equipment (conveyors, tanks, machinery), long corridors.
+
+```bash
+# PointCloud Slicer
+-p min_height:=0.20 -p max_height:=2.0 -p range_min:=0.5 -p range_max:=10.0
+
+# SLAM
+-p max_laser_range:=10.0 -p resolution:=0.10 -p minimum_travel_distance:=0.5 -p minimum_travel_heading:=0.5
+```
+
+- `max_height: 2.0` — Captures conveyors, tanks, tall machinery
+- `resolution: 0.10` — 10cm/pixel, clean maps for large areas
+- `minimum_travel_distance: 0.5` — Less frequent updates, cleaner result
+
+#### 🏢 Medium Room (office, lab, empty room)
+
+Regular walls, some furniture, moderate distances.
+
+```bash
+# PointCloud Slicer
+-p min_height:=0.20 -p max_height:=0.80 -p range_min:=0.5 -p range_max:=8.0
+
+# SLAM
+-p max_laser_range:=8.0 -p resolution:=0.05 -p minimum_travel_distance:=0.3 -p minimum_travel_heading:=0.3
+```
+
+- `max_height: 0.80` — Captures desks, shelves, door frames
+- `resolution: 0.05` — 5cm/pixel, good balance of detail and noise
+
+#### 🏠 Small Cluttered Space (bedroom, storage room, workshop)
+
+Many objects close together, narrow passages, lots of furniture at various heights.
+
+```bash
+# PointCloud Slicer
+-p min_height:=0.25 -p max_height:=0.50 -p range_min:=0.3 -p range_max:=5.0
+
+# SLAM
+-p max_laser_range:=5.0 -p resolution:=0.03 -p minimum_travel_distance:=0.2 -p minimum_travel_heading:=0.2
+```
+
+- `min_height: 0.25` — Filters shoes, cables, floor clutter
+- `range_min: 0.3` — Detects furniture in tight spaces
+- `resolution: 0.03` — 3cm/pixel, fine detail for small areas
+
+### Practical LiDAR Test — Object Detection
+
+Follow this procedure to verify your parameters are correctly tuned:
+
+**1. Place a test object** (chair, box, trash can) **1.5 meters** in front of the robot.
+
+**2. Start the pipeline** and open RViz2 with both LaserScan and PointCloud2 displays.
+
+**3. Check the LaserScan display.** The object should appear as a cluster of points at ~1.5m. If not:
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Object not visible | Below `min_height` | Decrease `min_height` |
+| Object not visible | Above `max_height` | Increase `max_height` |
+| Object not visible | Inside `range_min` dead zone | Decrease `range_min` |
+| Object partially visible | Only part is in the scan band | Widen `min_height`/`max_height` range |
+
+**4. Walk the robot around the object.** The `/map` should draw the object's outline. With PointCloud2 `Decay Time = 999`, you'll see the 3D shape accumulating.
+
+**5. Fine-tune without restarting everything** — kill and relaunch only the slicer:
+
+```bash
+pkill -f pointcloud_to_laser
+sleep 1
+ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
+  -p target_frame:=utlidar_lidar \
+  -p min_height:=0.15 \
+  -p max_height:=1.0 \
+  -p range_min:=0.3 \
+  -p range_max:=8.0 \
+  -r cloud_in:=/point_cloud2 &
+```
+
+### Diagnostic Commands
+
+Run in a new terminal with `source /env_ros2.sh`:
+
+```bash
+# Check scan frequency (expect ~7.7 Hz)
+ros2 topic hz /point_cloud2
+
+# Check current scan parameters
+ros2 topic echo /scan | grep -A2 "range_min"
+
+# Check points per frame
+ros2 topic echo /point_cloud2 | grep "width"
+
+# Check CPU usage per node
+top -bn1 | grep -E "voxel_deco|go2_driver|pointcloud|slam"
+
+# List all active topics
+ros2 topic list
+
+# Check QoS compatibility
+ros2 topic info /point_cloud2 --verbose
+```
+
+### Common Noise Sources and Fixes
+
+| Noise Source | Symptom | Fix |
+|---|---|---|
+| Robot's own legs | Points at ~30cm in all directions | Increase `range_min` to `0.5` |
+| Ground reflections | Random points near robot at ground level | Increase `min_height` to `0.25` |
+| Ceiling reflections | Points appearing above real obstacles | Decrease `max_height` |
+| Glass / mirrors | Ghost walls, duplicated room geometry | No LiDAR fix — avoid glass surfaces |
+| Multi-path reflections | Scattered random points in small rooms | Decrease `range_max` |
+| Moving people | Temporary blobs appearing in the map | Increase `minimum_travel_distance` |
+| Shiny metal surfaces | Sporadic false points at random distances | Increase `min_height`, lower `range_max` |
 
 ---
 
@@ -436,7 +700,7 @@ rviz2
 |---|---|---|
 | `conn_type` | `"webrtc"` | Connection protocol. Always `"webrtc"` for Go2 EDU. |
 | `robot_ip` | `"192.168.123.161"` | Robot's IP on the wired Ethernet. Default for Go2 EDU. |
-| `enable_video` | `false` | Enable camera stream. Set `true` for visual SLAM or object detection. Increases CPU usage. |
+| `enable_video` | `false` | Enable camera stream. Set `true` for visual SLAM or object detection. Increases CPU usage. Best used with C++ pipeline. |
 | `decode_lidar` | `true` | Decode compressed voxels into PointCloud2 inside the driver. Set `false` for C++ pipeline. |
 | `publish_raw_voxel` | `false` | Publish raw compressed voxels on `/utlidar/voxel_map_compressed`. Set `true` for C++ pipeline. |
 
@@ -447,20 +711,10 @@ These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 | Parameter | Default | Description | Tuning Guide |
 |---|---|---|---|
 | `target_frame` | `utlidar_lidar` | TF frame for the output scan. Must match the TF publisher. | Don't change. |
-| `min_height` | `0.15` | Minimum height (meters) above the LiDAR to include in the 2D slice. | **Lower = more ground noise.** Raise to 0.20–0.25 if you see false obstacles near the robot. |
-| `max_height` | `0.60` | Maximum height (meters) above the LiDAR to include. | **Higher = captures taller objects** but may include ceiling reflections. For outdoor use, try 1.0–2.0. |
-| `range_min` | `0.5` | Minimum distance (meters) to accept a point. | **Raise to 0.6–0.8** if you see noise from the robot's own body. |
-| `range_max` | `10.0` | Maximum distance (meters). Points beyond this are discarded. | The Go2 LiDAR has ~8m effective range. Setting higher than 10 just adds noise. |
-
-**Example: Outdoor mapping with taller obstacles**
-```bash
--p min_height:=0.20 -p max_height:=1.5 -p range_min:=0.6 -p range_max:=10.0
-```
-
-**Example: Tight indoor corridor**
-```bash
--p min_height:=0.15 -p max_height:=0.40 -p range_min:=0.3 -p range_max:=5.0
-```
+| `min_height` | `0.20` | Minimum height (meters) above the LiDAR to include in the 2D slice. | **Lower = more ground noise.** Raise to 0.25 if you see false obstacles near the robot. |
+| `max_height` | `0.60` | Maximum height (meters) above the LiDAR to include. | **Higher = captures taller objects** but may include ceiling reflections. For outdoor/industrial use, try 1.0–2.0. |
+| `range_min` | `0.5` | Minimum distance (meters) to accept a point. | **Raise to 0.6–0.8** if you see noise from the robot's own body. Lower to 0.3 for tight spaces. |
+| `range_max` | `8.0` | Maximum distance (meters). Points beyond this are discarded. | The Go2 LiDAR has ~8m effective range. Setting higher than 10 just adds noise. |
 
 ### SLAM Parameters
 
@@ -521,29 +775,79 @@ sudo docker exec -it dev_unitree_go2 bash
 
 ---
 
-## ⚠️ Troubleshooting
+## 💾 Saving Maps
 
-### Network interface not found (`does not match an available interface`)
-
-The CycloneDDS is configured to use a specific Ethernet interface (e.g., `enx0c3796dc8be5`). This error means the interface is not active.
-
-**Solution:** On the host, run the network setup script before entering the container:
+### Save current map as image
 
 ```bash
-sudo bash ~/on_network.sh
+docker exec -it dev_unitree_go2 bash
+source /env_ros2.sh
+ros2 run nav2_map_server map_saver_cli -f /ros2_ws/my_map_name
 ```
 
-Or manually:
+> **Note:** Always save to `/ros2_ws` to ensure the files are persisted on your host machine (mounted via Docker volume).
+
+This generates two files:
+- `my_map_name.pgm` — The occupancy grid image
+- `my_map_name.yaml` — Map metadata (resolution, origin, etc.)
+
+### Save SLAM state (to continue mapping later)
+
+```bash
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/ros2_ws/my_map'}"
+```
+
+### Load saved map and continue mapping
+
+Add to the SLAM node launch:
+
+```bash
+-p map_file_name:=/ros2_ws/my_map \
+-p map_start_at_dock:=true
+```
+
+### Record raw data (rosbag)
+
+```bash
+ros2 bag record /point_cloud2 /scan /odom /tf /tf_static /map -o /ros2_ws/session_01
+```
+
+Replay later:
+
+```bash
+ros2 bag play /ros2_ws/session_01
+```
+
+---
+
+## ⚠️ Troubleshooting
+
+### `No route to host` / `Failed to get robot public key`
+
+The network connection to the robot is not established. **On the host** (not inside Docker):
 
 ```bash
 sudo ip link set enx0c3796dc8be5 up
+sudo ip addr flush dev enx0c3796dc8be5
 sudo ip addr add 192.168.123.100/24 dev enx0c3796dc8be5
 ping -c 4 192.168.123.161
 ```
 
+If ping succeeds, restart the pipeline inside the container.
+
+### `does not match an available interface supporting udp`
+
+The Ethernet adapter is not connected or has a different name. Check on the host:
+
+```bash
+ip link show | grep enx
+```
+
+If the name is different, update `/env_ros2.sh` inside the container with the correct interface name.
+
 ### Map flickering / alternating between old and new maps
 
-This happens when DDS retains cached map data from previous sessions (Transient Local durability). The solution is to restart the Docker container to clear all DDS memory:
+This happens when DDS retains cached map data from previous sessions (Transient Local durability). Restart the Docker container to clear all DDS memory:
 
 ```bash
 # On the HOST (not inside Docker):
@@ -552,7 +856,17 @@ sleep 5
 docker exec -it dev_unitree_go2 bash
 ```
 
-Then start the pipeline fresh inside the new container session. **Always restart the container before a new mapping session** to avoid ghost maps.
+**Always restart the container before a new mapping session** to avoid ghost maps.
+
+### `enable_video:=true` causes crash or connection failure
+
+Video requires a stable WebRTC connection and additional CPU. Common causes:
+
+1. **Network not configured** → run the host network setup first
+2. **Robot not ready** → wait for "Robot 0 validated and ready" in the logs before enabling video
+3. **CPU overload (Python mode)** → use the **C++ pipeline** (`decode_lidar:=false`), which frees ~50% CPU for video processing
+
+**Recommended:** use `enable_video:=true` with the C++ pipeline to avoid CPU overload.
 
 ### QoS warnings in the terminal
 
@@ -568,21 +882,3 @@ This is normal during the first 2-3 seconds of startup. The TF tree takes a mome
 2. Check that `ros2 topic hz /point_cloud2` shows ~7 Hz
 3. Verify Reliability Policy is set to **Best Effort** for LaserScan and PointCloud2 displays
 4. The Map display should use the **default** QoS (Reliable + Transient Local) — do NOT change it to Best Effort
-
----
-
-## 💾 Saving the Map
-
-Once your mapping session is complete and the map looks good in RViz2, open a new terminal:
-
-```bash
-docker exec -it dev_unitree_go2 bash
-source /env_ros2.sh
-ros2 run nav2_map_server map_saver_cli -f /ros2_ws/my_map_name
-```
-
-> **Note:** Always save to `/ros2_ws` to ensure the files are persisted on your host machine (mounted via Docker volume).
-
-This generates two files:
-- `my_map_name.pgm` — The occupancy grid image
-- `my_map_name.yaml` — Map metadata (resolution, origin, etc.)
