@@ -1,21 +1,61 @@
-# Mapping SLAM - Unitree Go2 EDU
+# Mapping SLAM — Unitree Go2 EDU
 
 Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera calibrations, LiDAR processing, and DDS parameters. This setup has been fully validated and homologated for **ROS 2 Foxy**.
 
 ---
 
-## 🚀 Quick Start with Pre-built Image (Recommended)
+## Table of Contents
+
+1. [Quick Start with Pre-built Image (Recommended)](#1-quick-start-with-pre-built-image-recommended)
+   - 1.1 [Prerequisites](#11-prerequisites)
+   - 1.2 [Host Preparation](#12-host-preparation)
+   - 1.3 [Host Network Setup](#13-host-network-setup)
+   - 1.4 [Pull the Pre-built Image](#14-pull-the-pre-built-image)
+   - 1.5 [Create the Docker Compose File](#15-create-the-docker-compose-file)
+   - 1.6 [Start the Container](#16-start-the-container)
+2. [Building from Source (Alternative)](#2-building-from-source-alternative)
+3. [Environment Setup Script (`env_ros2.sh`)](#3-environment-setup-script-env_ros2sh)
+4. [Running the SLAM Pipeline](#4-running-the-slam-pipeline)
+   - 4.1 [C++ High-Performance Mode — 2 Terminals (Recommended)](#41-c-high-performance-mode--2-terminals-recommended)
+   - 4.2 [Python Mode — 2 Terminals (Legacy)](#42-python-mode--2-terminals-legacy)
+   - 4.3 [Standard Mode — Multi-Terminal (5 Terminals)](#43-standard-mode--multi-terminal-5-terminals)
+5. [Camera / Video Stream](#5-camera--video-stream)
+   - 5.1 [Enabling the Camera](#51-enabling-the-camera)
+   - 5.2 [Published Topics](#52-published-topics)
+   - 5.3 [RViz2 Camera Setup](#53-rviz2-camera-setup)
+   - 5.4 [One-Command Launch Script](#54-one-command-launch-script)
+6. [LiDAR L1 Tuning Guide](#6-lidar-l1-tuning-guide)
+   - 6.1 [How the 2D Scan Works](#61-how-the-2d-scan-works)
+   - 6.2 [Environment Profiles](#62-environment-profiles)
+   - 6.3 [Practical LiDAR Test — Object Detection](#63-practical-lidar-test--object-detection)
+   - 6.4 [Diagnostic Commands](#64-diagnostic-commands)
+   - 6.5 [Common Noise Sources and Fixes](#65-common-noise-sources-and-fixes)
+7. [Architecture Overview](#7-architecture-overview)
+   - 7.1 [C++ High-Performance Pipeline](#71-c-high-performance-pipeline)
+   - 7.2 [Python Legacy Pipeline](#72-python-legacy-pipeline)
+8. [Parameter Reference](#8-parameter-reference)
+   - 8.1 [WebRTC Driver Parameters](#81-webrtc-driver-parameters)
+   - 8.2 [PointCloud Slicer Parameters](#82-pointcloud-slicer-parameters)
+   - 8.3 [SLAM Parameters](#83-slam-parameters)
+   - 8.4 [TF Publisher Parameters](#84-tf-publisher-parameters)
+9. [Docker Image Tags](#9-docker-image-tags)
+10. [Saving Maps](#10-saving-maps)
+11. [Troubleshooting](#11-troubleshooting)
+
+---
+
+## 1. Quick Start with Pre-built Image (Recommended)
 
 A fully configured Docker image with ROS 2 Foxy, CycloneDDS, the Go2 SDK, and all dependencies pre-installed is available on Docker Hub. **No compilation needed — just pull and run.**
 
-### Prerequisites
+### 1.1 Prerequisites
 
 - Linux (Ubuntu 20.04+ recommended)
 - Docker Engine installed ([install guide](https://docs.docker.com/engine/install/ubuntu/))
 - NVIDIA GPU + NVIDIA Container Toolkit (for RViz2 visualization)
 - Wired Ethernet connection to the Unitree Go2 EDU robot
 
-### 1. Host Preparation
+### 1.2 Host Preparation
 
 Allow Docker to access the display and install the NVIDIA Container Toolkit:
 
@@ -35,7 +75,7 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Host Network Setup
+### 1.3 Host Network Setup
 
 Before starting the container, configure the wired Ethernet connection to the robot **on the host**:
 
@@ -52,7 +92,7 @@ ping -c 4 192.168.123.161
 
 > ⚠️ **You must run this BEFORE starting any ROS 2 nodes.** If you see `No route to host` or `does not match an available interface`, the network is not configured.
 
-### 3. Pull the Pre-built Image
+### 1.4 Pull the Pre-built Image
 
 ```bash
 docker pull mirandametri/unitree-go2-slam:cpp-decoder-v1
@@ -60,7 +100,7 @@ docker pull mirandametri/unitree-go2-slam:cpp-decoder-v1
 
 > This downloads ~8 GB (compressed). The full image is ~24 GB uncompressed and includes: ROS 2 Foxy, CycloneDDS, go2_robot_sdk, slam_toolbox, pointcloud_to_laserscan, wasmtime C API, voxel_decoder_cpp, PCL, and all Python/C++ dependencies.
 
-### 4. Create the Docker Compose File
+### 1.5 Create the Docker Compose File
 
 Create a folder for your project and the compose file:
 
@@ -101,7 +141,7 @@ services:
 
 Save with `Ctrl+O`, `Enter`, `Ctrl+X`.
 
-### 5. Start the Container
+### 1.6 Start the Container
 
 ```bash
 cd ~/unitree_slam
@@ -113,7 +153,7 @@ You are now inside the container with everything ready. Proceed to the **Environ
 
 ---
 
-## 🛠️ Building from Source (Alternative)
+## 2. Building from Source (Alternative)
 
 If you prefer to build everything from scratch instead of using the pre-built image, use `osrf/ros:foxy-desktop` as the base image in the `docker-compose.yml`:
 
@@ -142,7 +182,7 @@ colcon build
 
 ---
 
-## 🔧 Environment Setup Script (`env_ros2.sh`)
+## 3. Environment Setup Script (`env_ros2.sh`)
 
 Every terminal that runs a ROS 2 node **must** have the correct environment variables configured. Instead of typing 8 lines of exports every time, create a reusable script.
 
@@ -164,46 +204,28 @@ Paste the following content:
 # =============================================================
 
 # --- ROS 2 Foxy core ---
-# Loads the base ROS 2 installation (rcl, rclpy, rclcpp, etc.)
 source /opt/ros/foxy/setup.bash
 
 # --- CycloneDDS workspace ---
-# Loads the custom-compiled CycloneDDS and its RMW layer.
-# This replaces the default FastRTPS with CycloneDDS for better
-# compatibility with the Unitree Go2's internal DDS traffic.
 source /upgrade_dds_ws/install/setup.bash 2>/dev/null || true
 
 # --- Go2 SDK workspace ---
-# Loads the go2_robot_sdk, lidar_processor, lidar_processor_cpp,
-# go2_interfaces, and all custom message types.
 source /go2_webrtc_ws/install/setup.bash
 
 # --- Locale ---
-# Forces the C locale to avoid decimal separator issues (comma vs dot)
-# in European/Brazilian systems. LC_NUMERIC ensures that floating-point
-# parameters like "0.05" are parsed correctly by ROS 2 nodes.
 export LC_ALL=C
 export LC_NUMERIC="en_US.UTF-8"
 
 # --- DDS Domain Isolation ---
-# The Unitree Go2 robot runs its own internal ROS 2 nodes on domain 0.
-# We use domain 42 to isolate our SLAM pipeline from the robot's
-# internal traffic. Without this, you get ghost nodes and topic conflicts.
+# Domain 42 isolates our SLAM pipeline from the robot's internal traffic (domain 0).
 export ROS_DOMAIN_ID=42
 
 # --- DDS Implementation ---
-# Switches from the default FastRTPS to CycloneDDS.
-# CycloneDDS handles the Go2's large UDP packets (LiDAR data) much
-# better than FastRTPS, which tends to fragment and drop them.
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # --- CycloneDDS Configuration ---
-# NetworkInterfaceAddress: The wired Ethernet adapter connected to the robot.
-#   Find yours with: ip a | grep "192.168.123" (on the host, before Docker)
-#   Common names: enx0c3796dc8be5, eth0, eno1
-# MaxMessageSize: 65500 bytes (max UDP payload, prevents fragmentation)
-# FragmentSize: 4000 bytes (CycloneDDS internal fragment size)
-# WhcHigh: 500kB write-cache watermark (prevents buffer overflow at 7+ Hz)
+# NetworkInterfaceAddress: Replace enx0c3796dc8be5 with YOUR adapter name.
+# Find yours with: ip a | grep "192.168.123" (on the host, before Docker)
 export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>enx0c3796dc8be5</NetworkInterfaceAddress><MaxMessageSize>65500</MaxMessageSize><FragmentSize>4000</FragmentSize></General><Internal><Watermarks><WhcHigh>500kB</WhcHigh></Watermarks></Internal></Domain></CycloneDDS>"
 
 echo "ROS 2 environment configured:"
@@ -230,13 +252,15 @@ source /env_ros2.sh
 
 ---
 
-## ⚡ C++ High-Performance Mode — 2 Terminals (Recommended)
+## 4. Running the SLAM Pipeline
+
+### 4.1 C++ High-Performance Mode — 2 Terminals (Recommended)
 
 Uses a native C++ decoder (`voxel_decoder_cpp`) that offloads LiDAR decoding from the Python driver, reducing CPU usage from ~75% to ~25% while increasing the scan rate from ~7 Hz to ~7.7 Hz.
 
 > 💡 **When to use:** This is the recommended mode for all mapping sessions. The C++ decoder uses wasmtime to run the same `libvoxel.wasm` algorithm natively, freeing CPU for SLAM and other tasks.
 
-### Performance Comparison
+#### Performance Comparison
 
 | Metric | Python Pipeline | C++ Pipeline |
 |---|---|---|
@@ -245,7 +269,7 @@ Uses a native C++ decoder (`voxel_decoder_cpp`) that offloads LiDAR decoding fro
 | /scan frequency | ~7 Hz | **~7.7 Hz** |
 | SLAM quality | Good | **Good** |
 
-### Terminal 1 — Pipeline
+#### Terminal 1 — Pipeline
 
 ```bash
 source /env_ros2.sh
@@ -256,8 +280,6 @@ pkill -f "go2_driver\|voxel_decoder\|pointcloud_to_laser\|slam_tool\|static_tran
 sleep 3
 
 # 1. WebRTC Driver — connects to the robot, publishes raw compressed voxels
-#    decode_lidar:=false → does NOT decode LiDAR (saves ~70% CPU)
-#    publish_raw_voxel:=true → publishes compressed data for the C++ decoder
 ros2 run go2_robot_sdk go2_driver_node --ros-args \
   -p conn_type:="webrtc" \
   -p robot_ip:="192.168.123.161" \
@@ -267,8 +289,6 @@ ros2 run go2_robot_sdk go2_driver_node --ros-args \
 sleep 8
 
 # 2. C++ Voxel Decoder — decodes compressed voxels natively via wasmtime
-#    Subscribes: /utlidar/voxel_map_compressed (Best Effort)
-#    Publishes:  /point_cloud2 (Best Effort)
 ros2 run voxel_decoder_cpp voxel_decoder_node &
 sleep 3
 
@@ -278,7 +298,6 @@ ros2 run tf2_ros static_transform_publisher \
 sleep 1
 
 # 4. PointCloud Slicer — converts 3D point cloud into 2D laser scan
-#    Adjust for your environment — see LiDAR Tuning Guide below
 ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
   -p target_frame:=utlidar_lidar \
   -p min_height:=0.20 \
@@ -289,7 +308,6 @@ ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
 sleep 1
 
 # 5. SLAM — builds the 2D occupancy grid map
-#    Adjust for your environment — see LiDAR Tuning Guide below
 ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
   -p odom_frame:=odom \
   -p base_frame:=base_link \
@@ -304,7 +322,7 @@ echo "C++ Pipeline running. Open RViz2 in Terminal 2."
 wait
 ```
 
-### Terminal 2 — Visualization
+#### Terminal 2 — Visualization
 
 Open a second terminal in the container:
 
@@ -324,20 +342,18 @@ rviz2
 4. (Optional) Click **Add** → **By display type** → **PointCloud2** → OK, then:
    - Expand **Topic** → set **Reliability Policy** to **Best Effort**
    - Set Topic to `/point_cloud2`
-   - Set **Decay Time** to `999` to accumulate points as the robot moves (builds a persistent 3D model)
+   - Set **Decay Time** to `999` to accumulate points as the robot moves
    - Set **Style** to `Points`, **Size** to `0.005` for a dense visualization
 
 To stop the pipeline, press `Ctrl+C` in Terminal 1.
 
----
-
-## 🐍 Python Mode — 2 Terminals (Legacy)
+### 4.2 Python Mode — 2 Terminals (Legacy)
 
 The original pipeline where the Python driver decodes the LiDAR internally. Uses more CPU (~75%) but requires no additional dependencies. Both pipelines coexist in the same Docker image — just change the launch parameters.
 
 > 💡 **When to use:** Fallback if the C++ decoder has issues, or for comparison/debugging.
 
-### Terminal 1 — Pipeline
+#### Terminal 1 — Pipeline
 
 ```bash
 source /env_ros2.sh
@@ -346,8 +362,7 @@ source /env_ros2.sh
 pkill -f "go2_driver\|voxel_decoder\|pointcloud_to_laser\|slam_tool\|static_transform\|rviz2"
 sleep 3
 
-# 1. WebRTC Driver — connects to the robot and decodes LiDAR data internally
-#    decode_lidar:=true → Python driver decodes voxels (high CPU)
+# 1. WebRTC Driver — decodes LiDAR data internally (high CPU)
 ros2 run go2_robot_sdk go2_driver_node --ros-args \
   -p conn_type:="webrtc" \
   -p robot_ip:="192.168.123.161" \
@@ -386,7 +401,7 @@ echo "Python Pipeline running. Open RViz2 in Terminal 2."
 wait
 ```
 
-### Terminal 2 — Visualization
+#### Terminal 2 — Visualization
 
 Same as C++ mode:
 
@@ -396,9 +411,7 @@ source /env_ros2.sh
 rviz2
 ```
 
----
-
-## 🐢 Standard Mode — Multi-Terminal (5 Terminals)
+### 4.3 Standard Mode — Multi-Terminal (5 Terminals)
 
 Each node runs in its own terminal for better debugging and control. Identical pipeline to Quick Mode, but you can monitor each node's output individually.
 
@@ -406,7 +419,7 @@ Each node runs in its own terminal for better debugging and control. Identical p
 
 **Run `source /env_ros2.sh` in ALL 5 terminals before starting.** For the C++ pipeline, also run `export LD_LIBRARY_PATH=/opt/wasmtime/lib:$LD_LIBRARY_PATH` in Terminals 1 and 2.
 
-### Terminal 1 — WebRTC Driver
+#### Terminal 1 — WebRTC Driver
 
 ```bash
 # C++ mode (recommended):
@@ -426,7 +439,7 @@ ros2 run go2_robot_sdk go2_driver_node --ros-args \
 #   -p publish_raw_voxel:=false
 ```
 
-### Terminal 2 — C++ Voxel Decoder (C++ mode only)
+#### Terminal 2 — C++ Voxel Decoder (C++ mode only)
 
 ```bash
 ros2 run voxel_decoder_cpp voxel_decoder_node
@@ -434,14 +447,14 @@ ros2 run voxel_decoder_cpp voxel_decoder_node
 
 > Skip this terminal if using Python mode (`decode_lidar:=true`).
 
-### Terminal 3 — TF Publisher
+#### Terminal 3 — TF Publisher
 
 ```bash
 ros2 run tf2_ros static_transform_publisher \
   0.289 0.0 0.08 0.0 0.0 0.0 base_link utlidar_lidar
 ```
 
-### Terminal 4 — PointCloud Slicer
+#### Terminal 4 — PointCloud Slicer
 
 ```bash
 ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
@@ -453,7 +466,7 @@ ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
   -r cloud_in:=/point_cloud2
 ```
 
-### Terminal 5 — SLAM
+#### Terminal 5 — SLAM
 
 ```bash
 ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
@@ -466,7 +479,7 @@ ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
   -p minimum_travel_heading:=0.3
 ```
 
-### Terminal 6 — RViz2
+#### Terminal 6 — RViz2
 
 ```bash
 rviz2
@@ -476,11 +489,69 @@ Follow the same RViz2 setup instructions from the C++ mode section above.
 
 ---
 
-## 🎯 LiDAR L1 Tuning Guide
+## 5. Camera / Video Stream
+
+The Go2 EDU has a front-facing camera accessible via the same WebRTC connection used for LiDAR and odometry. This section explains how to enable the video stream and visualize it alongside the SLAM pipeline.
+
+### 5.1 Enabling the Camera
+
+Set `enable_video:=true` on the driver node. This parameter activates the WebRTC video channel from the robot.
+
+```bash
+ros2 run go2_robot_sdk go2_driver_node --ros-args \
+  -p conn_type:="webrtc" \
+  -p robot_ip:="192.168.123.161" \
+  -p enable_video:=true \
+  -p decode_lidar:=false \
+  -p publish_raw_voxel:=true
+```
+
+> ⚠️ **Use with the C++ pipeline** (`decode_lidar:=false`). The Python pipeline already consumes ~75% CPU; adding video will overload the system. The C++ pipeline uses only ~25% CPU, leaving headroom for video processing.
+
+### 5.2 Published Topics
+
+When `enable_video:=true`, the driver publishes two additional topics:
+
+| Topic | Type | QoS | Description |
+|---|---|---|---|
+| `/camera/image_raw` | `sensor_msgs/Image` | Best Effort | Raw camera frames |
+| `/camera/camera_info` | `sensor_msgs/CameraInfo` | Best Effort | Calibration metadata (intrinsics, distortion) |
+
+Both use **Best Effort** QoS (the driver prioritizes speed over guaranteed delivery).
+
+### 5.3 RViz2 Camera Setup
+
+In RViz2, add the camera display:
+
+1. Click **Add** → **By display type** → **Image** → OK
+2. Set **Topic** to `/camera/image_raw`
+3. Expand **Topic** → set **Reliability Policy** to **Best Effort**
+
+> ⚠️ If you leave the Reliability Policy at the default (Reliable), RViz2 will show **"No Image"**. This happens because the ROS 2 QoS system does not deliver messages when the subscriber is stricter than the publisher — a Reliable subscriber cannot receive from a Best Effort publisher.
+
+### 5.4 One-Command Launch Script
+
+A convenience script is provided to launch the full pipeline (SLAM + video) in a single command:
+
+```bash
+source /env_ros2.sh
+export LD_LIBRARY_PATH=/opt/wasmtime/lib:$LD_LIBRARY_PATH
+/go2_webrtc_ws/slam_pipeline.sh cpp video
+```
+
+Arguments:
+- `cpp` — uses the C++ voxel decoder (recommended)
+- `video` — enables the camera stream (`enable_video:=true`)
+
+To launch without video: `/go2_webrtc_ws/slam_pipeline.sh cpp`
+
+---
+
+## 6. LiDAR L1 Tuning Guide
 
 The Unitree Go2 EDU uses the **L1 LiDAR**, mounted **under the robot's chin** (front-bottom), approximately **8cm from the ground**. The LiDAR emits rays in all directions (up, down, and around) producing a full 3D point cloud. The `pointcloud_to_laserscan` node then filters this cloud, keeping only points within a specific height band to create the 2D scan used by SLAM.
 
-### How the 2D Scan Works
+### 6.1 How the 2D Scan Works
 
 The LiDAR produces a 3D point cloud covering everything around the robot. The `pointcloud_to_laserscan` node slices a horizontal band from this cloud to create a 2D scan for SLAM:
 
@@ -502,7 +573,7 @@ The LiDAR produces a 3D point cloud covering everything around the robot. The `p
 | `range_min` | Dead zone around robot | Sees own legs/body as obstacles | Misses nearby walls in corridors |
 | `range_max` | Max detection distance | Misses distant walls | Multi-path reflections, ghost points |
 
-### Environment Profiles
+### 6.2 Environment Profiles
 
 #### 🏭 Large Industrial (factory, warehouse, power plant)
 
@@ -551,7 +622,7 @@ Many objects close together, narrow passages, lots of furniture at various heigh
 - `range_min: 0.3` — Detects furniture in tight spaces
 - `resolution: 0.03` — 3cm/pixel, fine detail for small areas
 
-### Practical LiDAR Test — Object Detection
+### 6.3 Practical LiDAR Test — Object Detection
 
 Follow this procedure to verify your parameters are correctly tuned:
 
@@ -584,7 +655,7 @@ ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
   -r cloud_in:=/point_cloud2 &
 ```
 
-### Diagnostic Commands
+### 6.4 Diagnostic Commands
 
 Run in a new terminal with `source /env_ros2.sh`:
 
@@ -608,7 +679,7 @@ ros2 topic list
 ros2 topic info /point_cloud2 --verbose
 ```
 
-### Common Noise Sources and Fixes
+### 6.5 Common Noise Sources and Fixes
 
 | Noise Source | Symptom | Fix |
 |---|---|---|
@@ -622,9 +693,9 @@ ros2 topic info /point_cloud2 --verbose
 
 ---
 
-## 📊 Architecture Overview
+## 7. Architecture Overview
 
-### C++ High-Performance Pipeline (Recommended)
+### 7.1 C++ High-Performance Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -638,6 +709,7 @@ ros2 topic info /point_cloud2 --verbose
 │  Does NOT decode — publishes raw compressed voxels          │
 │  Publishes: /utlidar/voxel_map_compressed (Best Effort)     │
 │  Also publishes: /odom, /imu, /tf, /joint_states            │
+│  (With enable_video:=true: /camera/image_raw, camera_info)  │
 └─────────────┬───────────────────────────────────────────────┘
               │ /utlidar/voxel_map_compressed (~7.7 Hz)
               ▼
@@ -666,10 +738,11 @@ ros2 topic info /point_cloud2 --verbose
 ┌─────────────────────────────────────────────────────────────┐
 │  RViz2 (Visualization)                                      │
 │  Map: Reliable | LaserScan/PointCloud2: Best Effort         │
+│  Camera Image: Best Effort                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Python Legacy Pipeline
+### 7.2 Python Legacy Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -692,19 +765,19 @@ ros2 topic info /point_cloud2 --verbose
 
 ---
 
-## 📐 Parameter Reference
+## 8. Parameter Reference
 
-### WebRTC Driver Parameters
+### 8.1 WebRTC Driver Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
 | `conn_type` | `"webrtc"` | Connection protocol. Always `"webrtc"` for Go2 EDU. |
 | `robot_ip` | `"192.168.123.161"` | Robot's IP on the wired Ethernet. Default for Go2 EDU. |
-| `enable_video` | `false` | Enable camera stream. Set `true` for visual SLAM or object detection. Increases CPU usage. Best used with C++ pipeline. |
+| `enable_video` | `false` | Enable camera stream. Set `true` for visual SLAM or object detection. Increases CPU usage. **Recommended with C++ pipeline only** (see [Section 5](#5-camera--video-stream)). |
 | `decode_lidar` | `true` | Decode compressed voxels into PointCloud2 inside the driver. Set `false` for C++ pipeline. |
 | `publish_raw_voxel` | `false` | Publish raw compressed voxels on `/utlidar/voxel_map_compressed`. Set `true` for C++ pipeline. |
 
-### PointCloud Slicer Parameters
+### 8.2 PointCloud Slicer Parameters
 
 These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 
@@ -716,7 +789,7 @@ These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 | `range_min` | `0.5` | Minimum distance (meters) to accept a point. | **Raise to 0.6–0.8** if you see noise from the robot's own body. Lower to 0.3 for tight spaces. |
 | `range_max` | `8.0` | Maximum distance (meters). Points beyond this are discarded. | The Go2 LiDAR has ~8m effective range. Setting higher than 10 just adds noise. |
 
-### SLAM Parameters
+### 8.3 SLAM Parameters
 
 | Parameter | Default | Description | Tuning Guide |
 |---|---|---|---|
@@ -728,7 +801,7 @@ These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 | `minimum_travel_distance` | `0.3` | Minimum distance (meters) the robot must travel before a new scan is added. | **Higher = fewer scans, cleaner map, faster.** Lower = more dense but noisier. |
 | `minimum_travel_heading` | `0.3` | Minimum rotation (radians, ~17°) before a new scan is added. | Same trade-off as above. |
 
-### TF Publisher Parameters
+### 8.4 TF Publisher Parameters
 
 The 6 numbers represent the LiDAR's position relative to `base_link`: `x y z roll pitch yaw`
 
@@ -741,7 +814,7 @@ The 6 numbers represent the LiDAR's position relative to `base_link`: `x y z rol
 
 ---
 
-## 🐳 Docker Image Tags
+## 9. Docker Image Tags
 
 All images are available on [Docker Hub](https://hub.docker.com/r/mirandametri/unitree-go2-slam/tags):
 
@@ -775,7 +848,7 @@ sudo docker exec -it dev_unitree_go2 bash
 
 ---
 
-## 💾 Saving Maps
+## 10. Saving Maps
 
 ### Save current map as image
 
@@ -820,7 +893,7 @@ ros2 bag play /ros2_ws/session_01
 
 ---
 
-## ⚠️ Troubleshooting
+## 11. Troubleshooting
 
 ### `No route to host` / `Failed to get robot public key`
 
@@ -882,3 +955,7 @@ This is normal during the first 2-3 seconds of startup. The TF tree takes a mome
 2. Check that `ros2 topic hz /point_cloud2` shows ~7 Hz
 3. Verify Reliability Policy is set to **Best Effort** for LaserScan and PointCloud2 displays
 4. The Map display should use the **default** QoS (Reliable + Transient Local) — do NOT change it to Best Effort
+
+### Camera shows "No Image" in RViz2
+
+The Reliability Policy for the Image display must be set to **Best Effort**. The driver publishes camera frames with Best Effort QoS, and ROS 2 will not deliver messages when the subscriber (RViz2 default: Reliable) is stricter than the publisher. See [Section 5.3](#53-rviz2-camera-setup).
