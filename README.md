@@ -30,6 +30,7 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
    - 6.3 [Practical LiDAR Test — Object Detection](#63-practical-lidar-test--object-detection)
    - 6.4 [Diagnostic Commands](#64-diagnostic-commands)
    - 6.5 [Common Noise Sources and Fixes](#65-common-noise-sources-and-fixes)
+   - 6.6 [Quick Tuning Reference](#66-quick-tuning-reference)
 7. [Architecture Overview](#7-architecture-overview)
    - 7.1 [C++ High-Performance Pipeline](#71-c-high-performance-pipeline)
    - 7.2 [Python Legacy Pipeline](#72-python-legacy-pipeline)
@@ -224,14 +225,21 @@ export ROS_DOMAIN_ID=42
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # --- CycloneDDS Configuration ---
-# NetworkInterfaceAddress: Replace enx0c3796dc8be5 with YOUR adapter name.
+# Auto-detect network interface: if the Ethernet cable to the robot is connected,
+# bind CycloneDDS to that specific interface. Otherwise, leave it unset (local only).
+# Replace enx0c3796dc8be5 with YOUR adapter name.
 # Find yours with: ip a | grep "192.168.123" (on the host, before Docker)
-export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>enx0c3796dc8be5</NetworkInterfaceAddress><MaxMessageSize>65500</MaxMessageSize><FragmentSize>4000</FragmentSize></General><Internal><Watermarks><WhcHigh>500kB</WhcHigh></Watermarks></Internal></Domain></CycloneDDS>"
+if ip link show enx0c3796dc8be5 2>/dev/null | grep -q "state UP"; then
+    export CYCLONEDDS_URI="<CycloneDDS><Domain><General><NetworkInterfaceAddress>enx0c3796dc8be5</NetworkInterfaceAddress><MaxMessageSize>65500</MaxMessageSize><FragmentSize>4000</FragmentSize></General><Internal><Watermarks><WhcHigh>500kB</WhcHigh></Watermarks></Internal></Domain></CycloneDDS>"
+    echo "  Interface=enx0c3796dc8be5 (cable connected)"
+else
+    export CYCLONEDDS_URI=""
+    echo "  Interface=ANY (cable not detected — local only)"
+fi
 
 echo "ROS 2 environment configured:"
 echo "  ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 echo "  RMW=$RMW_IMPLEMENTATION"
-echo "  Interface=enx0c3796dc8be5"
 ```
 
 Save with `Ctrl+O`, `Enter`, `Ctrl+X`. Then make it executable:
@@ -555,7 +563,8 @@ The Unitree Go2 EDU uses the **L1 LiDAR**, mounted **under the robot's chin** (f
 
 The LiDAR produces a 3D point cloud covering everything around the robot. The `pointcloud_to_laserscan` node slices a horizontal band from this cloud to create a 2D scan for SLAM:
 
-![LiDAR Height Parameters](docs/lidar_height_diagram.png)
+![LiDAR Side View — Height Parameters](docs/side_view.png)
+![LiDAR Top View — Horizontal Parameters](docs/top_view.png)
 
 **Vertical parameters** (measured from the LiDAR position, not from the ground):
 
@@ -690,6 +699,52 @@ ros2 topic info /point_cloud2 --verbose
 | Multi-path reflections | Scattered random points in small rooms | Decrease `range_max` |
 | Moving people | Temporary blobs appearing in the map | Increase `minimum_travel_distance` |
 | Shiny metal surfaces | Sporadic false points at random distances | Increase `min_height`, lower `range_max` |
+
+### 6.6 Quick Tuning Reference
+
+A single-table reference for the most common tuning scenarios. When you see a symptom in RViz2, find it below and adjust the corresponding parameter.
+
+#### "I see… I adjust…" — Tuning Cheat Sheet
+
+| Symptom | Action | Parameter | Useful Range | Physical Limit | Unit |
+|---|---|---|---|---|---|
+| Ground noise / false obstacles at floor level | Raise the bottom of the scan band | `min_height` | 0.15 – 0.30 | ≥ −0.08 (ground) | m |
+| Missing low obstacles (steps, cables, shoes) | Lower the bottom of the scan band | `min_height` | 0.10 – 0.20 | ≥ −0.08 (ground) | m |
+| Missing tall objects (shelves, machinery) | Raise the top of the scan band | `max_height` | 0.80 – 2.00 | No hard limit | m |
+| Ceiling reflections / noise above obstacles | Lower the top of the scan band | `max_height` | 0.50 – 0.80 | No hard limit | m |
+| Robot legs/body appear as obstacles | Increase the dead zone radius | `range_min` | 0.3 – 0.8 | ≥ 0.0 | m |
+| Missing nearby walls in tight corridors | Decrease the dead zone radius | `range_min` | 0.2 – 0.4 | ≥ 0.0 | m |
+| Ghost points / multi-path reflections in small rooms | Reduce the maximum detection distance | `range_max` | 5.0 – 8.0 | L1 effective: ~8 m | m |
+| Missing distant walls in large spaces | Increase the maximum detection distance | `range_max` | 8.0 – 10.0 | L1 effective: ~8 m | m |
+| Map too noisy / too many scan insertions | Increase travel required between scans | `minimum_travel_distance` | 0.3 – 0.5 | — | m |
+| Map missing detail in tight areas | Decrease travel required between scans | `minimum_travel_distance` | 0.1 – 0.2 | — | m |
+| Map too coarse / blocky cells | Increase map resolution (smaller cell size) | `resolution` | 0.03 – 0.05 | — | m/cell |
+| Map too noisy / computation too high | Decrease map resolution (larger cell size) | `resolution` | 0.05 – 0.10 | — | m/cell |
+
+#### Mandatory Rules
+
+These constraints are enforced by the physics of the system. Violating them produces empty scans or invalid data:
+
+1. **`min_height` < `max_height`** — Always. If inverted (e.g., min=0.8, max=0.2), no points pass the filter and the scan is empty.
+
+2. **`min_height` ≥ −0.08 m** — The LiDAR is mounted 8cm above the ground. A `min_height` of −0.08 means "at ground level." Values below −0.08 attempt to scan underground, which only produces noise. In practice, keep `min_height` ≥ 0.10 to avoid ground reflections.
+
+3. **`range_min` < `range_max`** — Always. The dead zone must be smaller than the detection distance.
+
+4. **`range_max` ≤ 10.0 m** — The L1 LiDAR has an effective range of approximately 8 meters. Setting `range_max` beyond 10m adds noise without meaningful detections.
+
+5. **`max_laser_range` ≥ `range_max`** — The SLAM node's `max_laser_range` should match or exceed the slicer's `range_max`. Otherwise, SLAM discards valid scan data.
+
+#### About the −0.08 m Limit
+
+All height parameters (`min_height`, `max_height`) are measured **from the LiDAR position**, not from the ground. Since the LiDAR is mounted at 8cm above the ground:
+
+- `min_height = 0.0` → at LiDAR level (8cm above ground)
+- `min_height = 0.20` → 20cm above LiDAR = 28cm above ground (default)
+- `min_height = −0.08` → 8cm below LiDAR = ground level
+- `min_height < −0.08` → below ground = physically impossible, only noise
+
+See the [side view diagram](#61-how-the-2d-scan-works) for a visual reference.
 
 ---
 
