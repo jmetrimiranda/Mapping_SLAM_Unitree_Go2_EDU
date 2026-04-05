@@ -19,6 +19,7 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
    - 4.1 [C++ High-Performance Mode — 2 Terminals (Recommended)](#41-c-high-performance-mode--2-terminals-recommended)
    - 4.2 [Python Mode — 2 Terminals (Legacy)](#42-python-mode--2-terminals-legacy)
    - 4.3 [Standard Mode — Multi-Terminal (5 Terminals)](#43-standard-mode--multi-terminal-5-terminals)
+   - 4.4 [YAML-Tuned Mode — Industrial / Power Plant (Recommended)](#44-yaml-tuned-mode--industrial--power-plant-recommended)
 5. [Camera / Video Stream](#5-camera--video-stream)
    - 5.1 [Enabling the Camera](#51-enabling-the-camera)
    - 5.2 [Published Topics](#52-published-topics)
@@ -49,7 +50,18 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
     - 11.5 [Step-by-Step Workflow](#115-step-by-step-workflow)
     - 11.6 [Customizing Parameters](#116-customizing-parameters)
     - 11.7 [File Structure](#117-file-structure)
-12. [Troubleshooting](#12-troubleshooting)
+12. [YAML Parameter Reference — Advanced Tuning](#12-yaml-parameter-reference--advanced-tuning)
+    - 12.1 [Why the YAML Mode Matters](#121-why-the-yaml-mode-matters)
+    - 12.2 [Frames and Topics](#122-frames-and-topics)
+    - 12.3 [Map Quality](#123-map-quality)
+    - 12.4 [Scan Insertion](#124-scan-insertion)
+    - 12.5 [Angular Drift Correction — Critical Parameters](#125-angular-drift-correction--critical-parameters)
+    - 12.6 [Scan Matching Correlation Space](#126-scan-matching-correlation-space)
+    - 12.7 [Loop Closure](#127-loop-closure)
+    - 12.8 [Solver (Ceres)](#128-solver-ceres)
+    - 12.9 [Response Expansion](#129-response-expansion)
+    - 12.10 [Complete YAML — Power Plant Profile](#1210-complete-yaml--power-plant-profile)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -104,7 +116,7 @@ ping -c 4 192.168.123.161
 ### 1.4 Pull the Pre-built Image
 
 ```bash
-docker pull mirandametri/unitree-go2-slam:cpp-decoder-v1
+docker pull mirandametri/unitree-go2-slam:yaml-tuned-v1
 ```
 
 > This downloads ~8 GB (compressed). The full image is ~24 GB uncompressed and includes: ROS 2 Foxy, CycloneDDS, go2_robot_sdk, slam_toolbox, pointcloud_to_laserscan, wasmtime C API, voxel_decoder_cpp, PCL, and all Python/C++ dependencies.
@@ -126,7 +138,7 @@ version: '3.8'
 
 services:
   ros2_foxy_dev:
-    image: mirandametri/unitree-go2-slam:cpp-decoder-v1
+    image: mirandametri/unitree-go2-slam:yaml-tuned-v1
     container_name: dev_unitree_go2
     network_mode: host      # Crucial for DDS/UDP traffic with the robot
     ipc: host               # Crucial for LiDAR shared memory
@@ -167,7 +179,7 @@ You are now inside the container with everything ready. Proceed to the **Environ
 If you prefer to build everything from scratch instead of using the pre-built image, use `osrf/ros:foxy-desktop` as the base image in the `docker-compose.yml`:
 
 ```yaml
-    image: osrf/ros:foxy-desktop    # instead of mirandametri/unitree-go2-slam:cpp-decoder-v1
+    image: osrf/ros:foxy-desktop    # instead of mirandametri/unitree-go2-slam:yaml-tuned-v1
 ```
 
 Then, inside the container, install dependencies and compile:
@@ -505,6 +517,110 @@ Follow the same RViz2 setup instructions from the C++ mode section above.
 
 ---
 
+### 4.4 YAML-Tuned Mode — Industrial / Power Plant (Recommended)
+
+> 💡 **This is the most capable pipeline.** Instead of 6 inline parameters, it loads a complete YAML configuration file with 40+ parameters. This activates the full angular scan matching correction — essential for long industrial corridors, reflective metal floors, and environments where the robot's paws slip during turns.
+
+#### What changed from the base pipeline and why it matters
+
+| Component | Base Pipeline (`slam_pipeline.sh`) | YAML-Tuned (`slam_pipeline_v2.sh`) | Effect |
+|---|---|---|---|
+| slam_toolbox config | 6 inline params via `--ros-args -p` | Full YAML (40+ params) | Activates all scan matcher tuning |
+| `angle_variance_penalty` | ~0.5 (internal default — not set) | **1.0** | 2× stronger rejection of wrong yaw from odometry |
+| `coarse_search_angle_offset` | Not set (narrow internal default) | **0.349 rad (±20°)** | Searches correct pose in ±20° window — corrects paw slippage on smooth floors |
+| `correlation_search_space_resolution` | Not set | **0.01 m (1 cm)** | 1 cm precision in pose search vs coarser default |
+| `use_response_expansion` | Not set | **true** | Expands search when few features available (smooth metal floor) |
+| `target_frame` (slicer) | `utlidar_lidar` | **`base_link`** | Scan plane stays horizontal even when robot body sways during turns |
+| `min_height` / `max_height` | 0.5 / 0.8 m (from LiDAR) | **-0.1 / 0.4 m** (from body center) | Stable height reference — doesn't tilt with sensor |
+| `range_max` | 8.0 m | **12.0 m** | More wall features for angular correction |
+| `use_inf` | Not set (false) | **true** | Out-of-range → `inf` not `0` (no false obstacles at scan origin) |
+| `minimum_time_interval` | 0.5 s (filtered many scans) | **0.0** | All scans processed — critical at ~4–5 Hz Python scan rate |
+
+#### Quick start — Python mode (default, recommended for power plant sessions)
+
+```bash
+# 1. Ensure network is connected
+./on_network.sh
+
+# 2. Start the YAML-tuned pipeline
+docker exec -it dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && bash /go2_webrtc_ws/slam_pipeline_v2.sh"
+
+# 3. Open RViz2 in a second terminal
+docker exec -it dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && rviz2"
+```
+
+#### Quick start — C++ mode (lower CPU, recommended for long sessions)
+
+```bash
+docker exec -it dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && bash /go2_webrtc_ws/slam_pipeline_v2.sh cpp"
+```
+
+#### Verify the pipeline is healthy
+
+```bash
+# Scan frequency: ~4-5 Hz (Python) or ~7 Hz (C++)
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 topic hz /scan"
+
+# Map being published every ~5 seconds
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 topic hz /map"
+
+# LiDAR TF — must show Translation z=0.080
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 run tf2_ros tf2_echo base_link utlidar_lidar"
+
+# All expected topics present
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 topic list"
+# Expected: /map, /scan, /point_cloud2, /odom, /imu, /tf, /tf_static
+```
+
+#### Confirmed working indicators (from pipeline log)
+
+When the pipeline starts correctly, these lines appear in the log:
+
+```
+[INFO] [go2_driver_node]: Robot 0 validated and ready       ← WebRTC connected
+[INFO] [slam_toolbox]: Node using stack size 40000000        ← YAML was read (stack_size_to_use param)
+[INFO] [slam_toolbox]: Using solver plugin solver_plugins::CeresSolver   ← Ceres confirmed
+[INFO] [slam_toolbox]: CeresSolver: Using SCHUR_JACOBI preconditioner.  ← YAML solver params active
+[INFO] [pointcloud_to_laserscan]: Got a subscriber to laserscan...      ← Slicer receiving data
+Registering sensor: [Custom Described Lidar]                            ← LiDAR registered
+```
+
+#### RViz2 setup
+
+Same as other modes:
+
+1. Set **Fixed Frame** → `map`
+2. Add `/map` → Map → keep default QoS (Reliable + Transient Local)
+3. Add `/scan` → LaserScan → set **Reliability Policy** to **Best Effort**
+4. (Optional) Add `/point_cloud2` → PointCloud2 → **Best Effort**, Decay Time: 999
+
+#### Adjusting the YAML for your specific environment
+
+The YAML lives at `/go2_webrtc_ws/mapper_params_online_async.yaml` inside the container. Edit it with:
+
+```bash
+docker exec -it dev_unitree_go2 nano /go2_webrtc_ws/mapper_params_online_async.yaml
+```
+
+**After any change, restart the pipeline** — the YAML is read only at startup:
+
+```bash
+# Ctrl+C the running pipeline, then restart:
+docker exec -it dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && bash /go2_webrtc_ws/slam_pipeline_v2.sh"
+```
+
+See [Section 12](#12-yaml-parameter-reference--advanced-tuning) for the complete parameter reference with explanations tailored for industrial environments.
+
+---
+
 ## 5. Camera / Video Stream
 
 The Go2 EDU has a front-facing camera accessible via the same WebRTC connection used for LiDAR and odometry. This section explains how to enable the video stream and visualize it alongside the SLAM pipeline.
@@ -574,7 +690,7 @@ The LiDAR produces a 3D point cloud covering everything around the robot. The `p
 ![LiDAR Side View — Height Parameters](docs/side_view.png)
 ![LiDAR Top View — Horizontal Parameters](docs/top_view.png)
 
-**Vertical parameters** (measured from the LiDAR position, not from the ground):
+**Vertical parameters** (measured from the LiDAR position when `target_frame=utlidar_lidar`, or from body center when `target_frame=base_link`):
 
 | Parameter | What it does | Too low | Too high |
 |---|---|---|---|
@@ -590,9 +706,52 @@ The LiDAR produces a 3D point cloud covering everything around the robot. The `p
 | `range_min` | Dead zone around robot | Sees own legs/body as obstacles | Misses nearby walls in corridors |
 | `range_max` | Max detection distance | Misses distant walls | Multi-path reflections, ghost points |
 
+> ⚠️ **Note on `target_frame`:** When using `target_frame: base_link` (YAML-Tuned pipeline), height values are measured from the **robot body center** (base_link), not the LiDAR. The LiDAR is ~8 cm above base_link, so values shift by ~0.08 m compared to `utlidar_lidar` mode. See Section 6.2 for per-environment values.
+
 ### 6.2 Environment Profiles
 
-#### 🏭 Large Industrial (factory, warehouse, power plant)
+#### ⚡ Power Plant / Industrial (Usina, Refinaria, Petroquímica)
+
+Long straight corridors, metal equipment, reflective floors, pipes at various heights, large open areas between structures. Typically floors are smooth painted concrete or metal grating — both cause odometry slippage during turns. Use the **YAML-Tuned pipeline** (Section 4.4) for all power plant sessions.
+
+```bash
+# slam_pipeline_v2.sh — slicer parameters (target_frame: base_link)
+target_frame: base_link
+min_height: -0.1      # 10cm below body center = captures obstacles at knee/pipe height
+max_height:  0.5      # 50cm above body center = captures pipes, valve handles, barriers
+range_min:   0.3      # 30cm dead zone — minimal blind spot for tight passages
+range_max:   12.0     # 12m — good range without picking up reflective floor noise
+
+# YAML parameters optimized for power plant:
+resolution:              0.05    # 5cm/cell — sufficient detail for corridors and equipment
+minimum_travel_distance: 0.2     # 20cm between nodes — dense map in long corridors
+minimum_travel_heading:  0.5     # ~28° before a turn adds a new node
+max_laser_range:         12.0    # must match range_max
+do_loop_closing:         true    # essential — power plants have ring corridors around tanks
+loop_search_maximum_distance: 5.0  # increased for large ring-shaped corridors
+angle_variance_penalty:        1.0    # strong angular correction (see Section 12.5)
+coarse_search_angle_offset:    0.349  # ±20° search — handles slippage on smooth floors
+use_response_expansion:        true   # recovers when floor is too smooth for features
+```
+
+**Power plant specific notes:**
+- Metal gratings, pipes, and tanks cause point cloud noise → keep `range_min ≥ 0.3`
+- If corridors are wider than 8m (between tanks), increase `loop_search_maximum_distance` to `8.0`
+- For ring corridors (walking around a tank), loop closure at return will snap the map — keep `do_loop_closing: true`
+- For very long corridors (>50m): use [Segmented Mapping](#11-segmented-mapping-large-environments)
+- Robot mode: use **Normal** (not Classic) for smoother gait — less body sway = more stable scans
+
+#### 🅿️ Parking Garage / Underground Structure
+
+```bash
+target_frame: base_link
+min_height: -0.1       # Reflective floor at ~-0.35m from base_link — safely excluded
+max_height:  0.4       # Captures pillars and walls
+range_min:   0.3
+range_max:   12.0      # Floor reflections don't enter scan because they're below min_height
+```
+
+#### 🏭 Large Industrial (factory, warehouse)
 
 Open areas, tall equipment (conveyors, tanks, machinery), long corridors.
 
@@ -677,7 +836,7 @@ ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
 Run in a new terminal with `source /env_ros2.sh`:
 
 ```bash
-# Check scan frequency (expect ~7.7 Hz)
+# Check scan frequency (Python: ~4-5 Hz | C++: ~7.7 Hz)
 ros2 topic hz /point_cloud2
 
 # Check current scan parameters
@@ -702,11 +861,14 @@ ros2 topic info /point_cloud2 --verbose
 |---|---|---|
 | Robot's own legs | Points at ~30cm in all directions | Increase `range_min` to `0.5` |
 | Ground reflections | Random points near robot at ground level | Increase `min_height` to `0.25` |
+| Reflective metal floor | Inconsistent scans during turns | Switch to `target_frame: base_link` (YAML-Tuned pipeline) |
+| Metal gratings (usina) | High scan noise near floor | Increase `min_height`, use `range_min: 0.3` |
 | Ceiling reflections | Points appearing above real obstacles | Decrease `max_height` |
 | Glass / mirrors | Ghost walls, duplicated room geometry | No LiDAR fix — avoid glass surfaces |
 | Multi-path reflections | Scattered random points in small rooms | Decrease `range_max` |
 | Moving people | Temporary blobs appearing in the map | Increase `minimum_travel_distance` |
 | Shiny metal surfaces | Sporadic false points at random distances | Increase `min_height`, lower `range_max` |
+| Rotational drift in curves | Corridors misaligned after turns | Use YAML-Tuned pipeline (Section 4.4) |
 
 ### 6.6 Quick Tuning Reference
 
@@ -723,11 +885,12 @@ A single-table reference for the most common tuning scenarios. When you see a sy
 | Robot legs/body appear as obstacles | Increase the dead zone radius | `range_min` | 0.3 – 0.8 | ≥ 0.0 | m |
 | Missing nearby walls in tight corridors | Decrease the dead zone radius | `range_min` | 0.2 – 0.4 | ≥ 0.0 | m |
 | Ghost points / multi-path reflections in small rooms | Reduce the maximum detection distance | `range_max` | 5.0 – 8.0 | L1 effective: ~8 m | m |
-| Missing distant walls in large spaces | Increase the maximum detection distance | `range_max` | 8.0 – 10.0 | L1 effective: ~8 m | m |
+| Missing distant walls in large spaces | Increase the maximum detection distance | `range_max` | 8.0 – 12.0 | L1 effective: ~12 m | m |
 | Map too noisy / too many scan insertions | Increase travel required between scans | `minimum_travel_distance` | 0.3 – 0.5 | — | m |
 | Map missing detail in tight areas | Decrease travel required between scans | `minimum_travel_distance` | 0.1 – 0.2 | — | m |
 | Map too coarse / blocky cells | Increase map resolution (smaller cell size) | `resolution` | 0.03 – 0.05 | — | m/cell |
 | Map too noisy / computation too high | Decrease map resolution (larger cell size) | `resolution` | 0.05 – 0.10 | — | m/cell |
+| Rotational drift after turns | Enable YAML-Tuned pipeline | See Section 4.4 | — | — | — |
 
 #### Mandatory Rules
 
@@ -735,24 +898,24 @@ These constraints are enforced by the physics of the system. Violating them prod
 
 1. **`min_height` < `max_height`** — Always. If inverted (e.g., min=0.8, max=0.2), no points pass the filter and the scan is empty.
 
-2. **`min_height` ≥ −0.08 m** — The LiDAR is mounted 8cm above the ground. A `min_height` of −0.08 means "at ground level." Values below −0.08 attempt to scan underground, which only produces noise. In practice, keep `min_height` ≥ 0.10 to avoid ground reflections.
+2. **`min_height` ≥ −0.08 m** — The LiDAR is mounted 8cm above the ground. A `min_height` of −0.08 means "at ground level." Values below −0.08 attempt to scan underground, which only produces noise. In practice, keep `min_height` ≥ 0.10 to avoid ground reflections. *(This constraint applies when `target_frame: utlidar_lidar`. With `target_frame: base_link`, the equivalent lower limit is `min_height ≥ -0.16 m`.)*
 
 3. **`range_min` < `range_max`** — Always. The dead zone must be smaller than the detection distance.
 
-4. **`range_max` ≤ 10.0 m** — The L1 LiDAR has an effective range of approximately 8 meters. Setting `range_max` beyond 10m adds noise without meaningful detections.
+4. **`range_max` ≤ 12.0 m** — The L1 LiDAR has an effective range of approximately 8–12 meters depending on surface reflectivity. Setting `range_max` beyond 12m adds noise without meaningful detections.
 
 5. **`max_laser_range` ≥ `range_max`** — The SLAM node's `max_laser_range` should match or exceed the slicer's `range_max`. Otherwise, SLAM discards valid scan data.
 
 #### About the −0.08 m Limit
 
-All height parameters (`min_height`, `max_height`) are measured **from the LiDAR position**, not from the ground. Since the LiDAR is mounted at 8cm above the ground:
+All height parameters (`min_height`, `max_height`) are measured **from the LiDAR position** when using `target_frame: utlidar_lidar`. Since the LiDAR is mounted at 8cm above the ground:
 
 - `min_height = 0.0` → at LiDAR level (8cm above ground)
 - `min_height = 0.20` → 20cm above LiDAR = 28cm above ground (default)
 - `min_height = −0.08` → 8cm below LiDAR = ground level
 - `min_height < −0.08` → below ground = physically impossible, only noise
 
-See the [side view diagram](#61-how-the-2d-scan-works) for a visual reference.
+When using `target_frame: base_link` (YAML-Tuned pipeline), heights are measured from the robot's center of mass (~16cm above ground). Ground level is approximately `min_height = -0.16`.
 
 ---
 
@@ -794,6 +957,7 @@ See the [side view diagram](#61-how-the-2d-scan-works) for a visual reference.
 ┌─────────────────────────────────────────────────────────────┐
 │  async_slam_toolbox_node                                    │
 │  Builds occupancy grid from laser scans + odometry          │
+│  Config: mapper_params_online_async.yaml (YAML-Tuned mode)  │
 │  Output: /map (Reliable + Transient Local)                  │
 └─────────────┬───────────────────────────────────────────────┘
               │ /map (OccupancyGrid)
@@ -819,7 +983,7 @@ See the [side view diagram](#61-how-the-2d-scan-works) for a visual reference.
 │  Decodes voxels → publishes /point_cloud2 (Best Effort)     │
 │  Also publishes: /odom, /imu, /tf, /joint_states            │
 └─────────────┬───────────────────────────────────────────────┘
-              │ /point_cloud2 (PointCloud2, ~7 Hz)
+              │ /point_cloud2 (PointCloud2, ~4-5 Hz)
               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  pointcloud_to_laserscan_node → slam_toolbox → /map         │
@@ -844,25 +1008,32 @@ See the [side view diagram](#61-how-the-2d-scan-works) for a visual reference.
 
 These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 
-| Parameter | Default | Description | Tuning Guide |
-|---|---|---|---|
-| `target_frame` | `utlidar_lidar` | TF frame for the output scan. Must match the TF publisher. | Don't change. |
-| `min_height` | `0.20` | Minimum height (meters) above the LiDAR to include in the 2D slice. | **Lower = more ground noise.** Raise to 0.25 if you see false obstacles near the robot. |
-| `max_height` | `0.60` | Maximum height (meters) above the LiDAR to include. | **Higher = captures taller objects** but may include ceiling reflections. For outdoor/industrial use, try 1.0–2.0. |
-| `range_min` | `0.5` | Minimum distance (meters) to accept a point. | **Raise to 0.6–0.8** if you see noise from the robot's own body. Lower to 0.3 for tight spaces. |
-| `range_max` | `8.0` | Maximum distance (meters). Points beyond this are discarded. | The Go2 LiDAR has ~8m effective range. Setting higher than 10 just adds noise. |
+| Parameter | Base default | YAML-Tuned default | Description | Tuning Guide |
+|---|---|---|---|---|
+| `target_frame` | `utlidar_lidar` | `base_link` | TF frame for the output scan. `base_link` = stable horizontal plane during body sway. | Change to `base_link` for industrial environments. |
+| `min_height` | `0.20` | `-0.1` | Minimum height to include (m from frame origin). | **Lower = more ground noise.** |
+| `max_height` | `0.60` | `0.4` | Maximum height to include (m from frame origin). | **Higher = captures taller objects** but may include ceiling reflections. |
+| `range_min` | `0.5` | `0.3` | Minimum distance (m) to accept a point. | **Raise to 0.6–0.8** if you see noise from the robot's own body. |
+| `range_max` | `8.0` | `12.0` | Maximum distance (m). Points beyond this are discarded. | The Go2 LiDAR has ~8–12m effective range. |
+| `use_inf` | not set | `true` | Out-of-range points → `inf` instead of `0`. | Prevents false obstacles at the scan origin. |
 
 ### 8.3 SLAM Parameters
 
-| Parameter | Default | Description | Tuning Guide |
-|---|---|---|---|
-| `odom_frame` | `odom` | Odometry frame from the robot. | Don't change. |
-| `base_frame` | `base_link` | Robot's base frame. | Don't change. |
-| `map_frame` | `map` | Output map frame. | Don't change. |
-| `max_laser_range` | `8.0` | Maximum range (meters) for SLAM scan matching. | Match or slightly exceed your `range_max`. |
-| `resolution` | `0.05` | Map resolution in meters/pixel. 0.05 = 5cm per cell. | **Lower = more detail but more noise.** Try 0.03 for small rooms, 0.10 for large warehouses. |
-| `minimum_travel_distance` | `0.3` | Minimum distance (meters) the robot must travel before a new scan is added. | **Higher = fewer scans, cleaner map, faster.** Lower = more dense but noisier. |
-| `minimum_travel_heading` | `0.3` | Minimum rotation (radians, ~17°) before a new scan is added. | Same trade-off as above. |
+#### Inline mode (slam_pipeline.sh) — 6 parameters:
+
+| Parameter | Value | Description |
+|---|---|---|
+| `odom_frame` | `odom` | Odometry frame from the robot. |
+| `base_frame` | `base_link` | Robot's base frame. |
+| `map_frame` | `map` | Output map frame. |
+| `max_laser_range` | `8.0` | Maximum range (meters) for SLAM scan matching. |
+| `resolution` | `0.05` | Map resolution in meters/pixel. 0.05 = 5cm per cell. |
+| `minimum_travel_distance` | `0.2` | Minimum distance (meters) the robot must travel before a new scan is added. |
+| `minimum_travel_heading` | `0.5` | Minimum rotation (radians, ~28°) before a new scan is added. |
+
+#### YAML-Tuned mode (slam_pipeline_v2.sh) — 40+ parameters from YAML file:
+
+See [Section 12](#12-yaml-parameter-reference--advanced-tuning) for the complete reference.
 
 ### 8.4 TF Publisher Parameters
 
@@ -881,22 +1052,26 @@ The 6 numbers represent the LiDAR's position relative to `base_link`: `x y z rol
 
 All images are available on [Docker Hub](https://hub.docker.com/r/mirandametri/unitree-go2-slam/tags):
 
-| Tag | Description |
-|---|---|
-| `cpp-decoder-v1` | **Recommended.** Full pipeline with C++ voxel decoder + Python fallback. |
-| `python-stable` | Python-only pipeline. Backup before C++ changes. |
-| `latest` | Previous stable state. |
+| Tag | Description | When to use |
+|---|---|---|
+| `yaml-tuned-v1` | **Current recommended.** Full YAML SLAM config + C++ decoder. | Industrial, power plant, parking garage |
+| `cpp-decoder-v1` | Previous stable. Inline params, C++ decoder. | Backup / before YAML upgrade |
+| `pre-yaml-upgrade` | Snapshot taken 2026-04-05 before migration. | Full rollback if needed |
+| `python-stable` | Python-only pipeline. No C++ decoder. | Simple environments, debugging |
 
 ### Switching Between Images
 
 Edit `docker-compose.yml` and change the `image:` line:
 
 ```yaml
-# For C++ pipeline (recommended):
+# Current recommended (YAML-tuned, industrial):
+image: mirandametri/unitree-go2-slam:yaml-tuned-v1
+
+# Previous stable (inline params):
 image: mirandametri/unitree-go2-slam:cpp-decoder-v1
 
-# For Python-only fallback:
-image: mirandametri/unitree-go2-slam:python-stable
+# Full rollback:
+image: mirandametri/unitree-go2-slam:pre-yaml-upgrade
 ```
 
 Then recreate the container:
@@ -907,7 +1082,7 @@ sudo docker compose up -d
 sudo docker exec -it dev_unitree_go2 bash
 ```
 
-> **Note:** You do NOT need to switch images to alternate between C++ and Python pipelines. Both pipelines coexist in `cpp-decoder-v1` — just change the launch parameters (`decode_lidar:=true/false`).
+> **Note:** You do NOT need to switch images to alternate between C++ and Python pipelines. Both pipelines coexist in all images — just change the launch parameters (`decode_lidar:=true/false`).
 
 ---
 
@@ -958,7 +1133,7 @@ ros2 bag play /ros2_ws/session_01
 
 ## 11. Segmented Mapping (Large Environments)
 
-For large environments like parking garages, long corridors, or multi-floor buildings, it is often impractical to map everything in a single continuous run. The robot may need to be physically repositioned (picked up and turned) between straight-line segments. This section describes a **segmented mapping workflow** that splits the mapping session into manageable segments while building a single accumulated map.
+For large environments like parking garages, long corridors, power plants, or multi-floor buildings, it is often impractical to map everything in a single continuous run. The robot may need to be physically repositioned (picked up and turned) between straight-line segments. This section describes a **segmented mapping workflow** that splits the mapping session into manageable segments while building a single accumulated map.
 
 ### 11.1 How Segmented Mapping Works
 
@@ -1359,7 +1534,345 @@ After mapping 6 segments, the output directory looks like:
 
 ---
 
-## 12. Troubleshooting
+## 12. YAML Parameter Reference — Advanced Tuning
+
+This section documents all parameters in `mapper_params_online_async.yaml`, explaining what each one does and why it matters for industrial environments. The YAML-Tuned pipeline (Section 4.4) uses this file instead of the 6 inline parameters.
+
+> **After any YAML change, restart the pipeline.** The file is read only at startup.
+
+### 12.1 Why the YAML Mode Matters
+
+The base `slam_pipeline.sh` passes only 6 parameters to slam_toolbox via `--ros-args -p`. All other parameters use internal defaults set inside the slam_toolbox package — defaults designed for general robotics use, not for specific industrial scenarios.
+
+The critical missing parameters were:
+
+| Parameter | Internal default | YAML value | Impact |
+|---|---|---|---|
+| `angle_variance_penalty` | ~0.5 | **1.0** | Scan matcher was accepting wrong angles from odometry |
+| `coarse_search_angle_offset` | narrow | **0.349 rad** | Search window too small to correct paw slippage errors |
+| `use_response_expansion` | false | **true** | No recovery when floor features were too sparse |
+| `minimum_time_interval` | 0.5 s | **0.0** | Was discarding half the scans at 4–5 Hz |
+
+These four parameters alone explain most of the rotational drift observed in parking garage and power plant corridors.
+
+### 12.2 Frames and Topics
+
+```yaml
+odom_frame: odom          # Must match go2_driver's odometry frame — do not change
+map_frame: map            # Output map frame — do not change
+base_frame: base_link     # Robot body frame — do not change
+scan_topic: /scan         # Must match the slicer's output topic — do not change
+use_map_saver: true       # Enables the map saver service
+mode: mapping             # mapping = build new map | localization = use existing map
+map_start_pose: [0.0, 0.0, 0.0]  # Robot's starting position in the map
+```
+
+### 12.3 Map Quality
+
+```yaml
+resolution: 0.05
+# Map cell size in meters. Each pixel in the occupancy grid represents this area.
+# 0.05 = 5cm/cell — good for industrial corridors and rooms
+# 0.03 = 3cm/cell — finer detail for small rooms, more memory/CPU
+# 0.10 = 10cm/cell — coarser, for very large warehouses where memory matters
+
+map_update_interval: 5.0
+# How often the /map topic is published (seconds).
+# Higher = less CPU usage but slower RViz2 updates.
+# 5.0 is appropriate for most mapping sessions.
+
+stack_size_to_use: 40000000
+# Memory stack for serializing large maps (bytes = 40 MB).
+# Increase if you get stack overflow errors on very large maps (>500m corridors).
+```
+
+### 12.4 Scan Insertion
+
+```yaml
+throttle_scans: 1
+# Use 1 out of every N incoming scans. 1 = use all scans.
+# Increase only if CPU is overloaded (e.g., on slower computers).
+
+minimum_travel_distance: 0.2
+# The robot must move at least this far (meters) before a new pose node
+# is added to the SLAM graph. Lower = denser graph, more detail, more CPU.
+# 0.2m is good for industrial corridors (adds a node every 20cm).
+
+minimum_travel_heading: 0.5
+# The robot must rotate at least this many radians (~28°) before a new
+# pose node is added during rotation. 0.5 = adds a node roughly every
+# quarter turn during slow rotation.
+
+minimum_time_interval: 0.0
+# Minimum time (seconds) between two accepted scans.
+# 0.0 = accept every scan that arrives.
+# CRITICAL: At 4–5 Hz (Python mode), setting this to 0.5 would discard
+# half the scans. Always use 0.0 when scan rate is below 10 Hz.
+
+transform_publish_period: 0.02
+# How often to publish the map→odom TF (seconds). 0.02 = 50 Hz.
+# Should be higher than the scan rate to ensure smooth visualization.
+
+transform_timeout: 0.2
+# How long to wait for a TF lookup before timing out (seconds).
+
+tf_buffer_duration: 30.0
+# How long to keep TF history in the buffer (seconds).
+```
+
+### 12.5 Angular Drift Correction — Critical Parameters
+
+These are the most important parameters for industrial environments with smooth floors, long corridors, and turns where the robot's paws may slip.
+
+```yaml
+angle_variance_penalty: 1.0
+# How strongly the scan matcher penalizes angular (yaw) errors.
+# INTERNAL DEFAULT: ~0.5 — accepted odometry yaw even when slightly wrong.
+# CURRENT VALUE: 1.0 — 2× stronger rejection of incorrect yaw.
+#
+# Physical meaning: when the robot turns a corner and its paws slip on a
+# smooth metal or painted concrete floor, the odometry may report "you
+# turned 90°" when the robot actually turned 87°. With penalty=0.5, the
+# scan matcher accepts this 3° error and the next corridor appears rotated
+# in the map. With penalty=1.0, it searches harder for the correct angle.
+
+coarse_search_angle_offset: 0.349
+# Angular search window (radians) for the coarse alignment phase.
+# 0.349 rad ≈ 20°. This means: "search ±20° around the odometry estimate."
+#
+# INTERNAL DEFAULT: a narrower value that only searched a few degrees.
+# With the narrow default, a 5° slippage error would be accepted because
+# the correct pose was outside the search window.
+# With 0.349: even if odometry is off by up to 20°, the scan matcher will
+# find the correct pose.
+
+coarse_angle_resolution: 0.0349
+# Angular step size in the coarse search (radians ≈ 2°).
+# 2° steps means 20 search positions across the ±20° window.
+
+fine_search_angle_offset: 0.00349
+# Angular search window for the fine refinement phase (radians ≈ 0.2°).
+# After the coarse search finds an approximate angle, fine search refines
+# it to 0.2° precision.
+
+distance_variance_penalty: 0.5
+# How strongly to penalize linear position errors (less critical than angular).
+
+minimum_angle_penalty: 0.9
+# Minimum acceptable angular match quality (0–1 scale).
+# 0.9 = reject matches with less than 90% angular confidence.
+
+minimum_distance_penalty: 0.5
+# Minimum acceptable linear match quality (0–1 scale).
+```
+
+### 12.6 Scan Matching Correlation Space
+
+These parameters define the search space used to align a new scan against the current map.
+
+```yaml
+correlation_search_space_dimension: 0.5
+# Size of the search area for local scan matching (meters in each direction).
+# 0.5m means the matcher searches ±0.5m around the estimated pose.
+
+correlation_search_space_resolution: 0.01
+# Precision of the local search grid (meters = 1 cm).
+# 0.01m = 1 cm grid — fine enough for accurate alignment in tight corridors.
+# Coarser values (0.05) would be faster but less accurate.
+
+correlation_search_space_smear_deviation: 0.1
+# Gaussian blur applied to the scan before matching.
+# Slightly smears point positions to improve robustness against small
+# calibration errors or noisy scans. 0.1m is a sensible default.
+
+link_match_minimum_response_fine: 0.1
+# Minimum quality threshold to link two consecutive scans (0–1).
+# 0.1 is permissive — accepts even weak matches between consecutive scans.
+# Increase to 0.3 if you see artifacts or "ghost" walls in the map.
+
+link_scan_maximum_distance: 1.5
+# Maximum distance (meters) between two scans for them to be linked.
+# Scans further apart than this won't be directly matched.
+
+scan_buffer_size: 10
+# Number of recent scans kept in memory for local matching.
+
+scan_buffer_maximum_scan_distance: 10.0
+# Maximum distance between scans in the buffer.
+```
+
+### 12.7 Loop Closure
+
+Loop closure detects when the robot returns to a previously mapped location and corrects accumulated drift by snapping the map together.
+
+```yaml
+do_loop_closing: true
+# Enable loop closure detection. ESSENTIAL for any non-trivial mapping session.
+# When the robot walks a ring corridor (around a tank, for example) and
+# returns to the starting point, loop closure will correct all accumulated
+# drift in a single optimization.
+
+loop_search_maximum_distance: 3.0
+# Search radius (meters) for loop closure candidates.
+# 3.0m works for parking garages.
+# For power plant ring corridors (large tanks), increase to 5.0 or 8.0.
+
+loop_match_minimum_chain_size: 10
+# Minimum number of pose nodes in the path for a loop candidate to be considered.
+# Prevents false loop closures on very short detours.
+
+loop_match_maximum_variance_coarse: 3.0
+# Maximum covariance accepted in the coarse loop match phase.
+# Higher = more permissive (accepts weaker loop candidates for refinement).
+
+loop_match_minimum_response_coarse: 0.35
+# Minimum quality threshold for coarse loop match (0–1).
+# 0.35 = accept candidates with at least 35% match quality for fine refinement.
+
+loop_match_minimum_response_fine: 0.45
+# Minimum quality threshold for the final loop match (0–1).
+# 0.45 = only apply loop closure if the fine match achieves ≥45% quality.
+# Higher values = fewer false loop closures but may miss real loops.
+
+loop_search_space_dimension: 8.0
+# Search volume size for loop closure (meters).
+
+loop_search_space_resolution: 0.05
+# Grid resolution for loop closure search (meters).
+
+loop_search_space_smear_deviation: 0.03
+# Gaussian blur for loop closure matching (tighter than local matching).
+```
+
+### 12.8 Solver (Ceres)
+
+The Ceres solver optimizes the pose graph — the collection of robot positions connected by scan matches.
+
+```yaml
+solver_plugin: solver_plugins::CeresSolver
+ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+# Best linear solver for sparse graphs (like SLAM pose graphs).
+
+ceres_preconditioner: SCHUR_JACOBI
+# Preconditioner that accelerates convergence for pose graphs.
+
+ceres_trust_strategy: LEVENBERG_MARQUARDT
+# Optimization strategy. Levenberg-Marquardt is robust for nonlinear problems.
+
+ceres_dogleg_type: TRADITIONAL_DOGLEG
+ceres_loss_function: None
+# No robust loss function — appropriate when scan matching quality is already
+# filtered by the response thresholds above.
+```
+
+> Do not change these unless you have specific nonlinear optimization expertise.
+
+### 12.9 Response Expansion
+
+```yaml
+use_response_expansion: true
+# When the initial scan match returns a low-quality response (e.g., on a
+# smooth metal floor with few geometric features), instead of accepting
+# the odometry estimate, expand the search to a larger region.
+#
+# CRITICAL for power plants and parking garages:
+# Smooth painted floors and reflective surfaces produce sparse scan features.
+# Without response expansion, SLAM would accept a bad odometry pose.
+# With it, SLAM searches more aggressively before giving up.
+```
+
+### 12.10 Complete YAML — Power Plant Profile
+
+Ready to use for Usina / Power Plant environments. Copy this to `/go2_webrtc_ws/mapper_params_online_async.yaml`:
+
+```yaml
+slam_toolbox:
+  ros__parameters:
+
+    # Solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # Frames and topics
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping
+    map_start_pose: [0.0, 0.0, 0.0]
+
+    # Operation
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02
+    map_update_interval: 5.0
+    resolution: 0.05
+    max_laser_range: 12.0          # Match range_max in slam_pipeline_v2.sh
+    minimum_time_interval: 0.0     # Critical at 4-5 Hz (Python mode)
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # Scan insertion
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.5
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+
+    # Loop closure — tuned for ring corridors around tanks
+    loop_search_maximum_distance: 5.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Correlation (local matching precision)
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Angular drift correction — THE KEY PARAMETERS for industrial floors
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0          # Strong angular correction
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349    # ±20° search window
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true         # Recover on smooth floors
+```
+
+---
+
+## 13. Troubleshooting
+
+### `/scan` frequency too low (< 2 Hz when robot is stationary)
+
+The `minimum_time_interval` in the YAML may be filtering out scans. Fix:
+
+```bash
+docker exec dev_unitree_go2 bash -c "
+  sed -i 's/minimum_time_interval: 0.5/minimum_time_interval: 0.0/' \
+  /go2_webrtc_ws/mapper_params_online_async.yaml &&
+  grep minimum_time_interval /go2_webrtc_ws/mapper_params_online_async.yaml
+"
+```
+
+Restart the pipeline.
 
 ### `No route to host` / `Failed to get robot public key`
 
@@ -1383,6 +1896,10 @@ ip link show | grep enx
 ```
 
 If the name is different, update `/env_ros2.sh` inside the container with the correct interface name.
+
+### `tf2_echo base_link utlidar_lidar` hangs with "Waiting for transform" or returns no data
+
+The pipeline is not running. The `base_link` frame only exists when `static_transform_publisher` is active (started by the pipeline). Start the pipeline first, then run `tf2_echo` in a second terminal.
 
 ### Map flickering / alternating between old and new maps
 
@@ -1411,17 +1928,48 @@ Video requires a stable WebRTC connection and additional CPU. Common causes:
 
 Messages like `New subscription discovered... incompatible QoS... RELIABILITY_QOS_POLICY` are **normal** and can be safely ignored. They appear when RViz2 auto-discovers topics before you manually set the Reliability Policy to Best Effort.
 
-### `Message Filter dropping message: frame 'utlidar_lidar'`
+### `Message Filter dropping message: frame 'utlidar_lidar'` or `frame 'base_link'`
 
-This is normal during the first 2-3 seconds of startup. The TF tree takes a moment to propagate. If it persists for more than 10 seconds, check that the `static_transform_publisher` is running.
+This is normal during the first 2–3 seconds of startup. The TF tree takes a moment to propagate. If it persists for more than 10 seconds, check that the `static_transform_publisher` is running:
+
+```bash
+docker exec dev_unitree_go2 bash -c "source /env_ros2.sh && ros2 node list | grep static"
+```
 
 ### No data in RViz2
 
 1. Make sure you ran `source /env_ros2.sh` in the RViz2 terminal
-2. Check that `ros2 topic hz /point_cloud2` shows ~7 Hz
+2. Check that `ros2 topic hz /point_cloud2` shows ~4 Hz (Python) or ~7 Hz (C++)
 3. Verify Reliability Policy is set to **Best Effort** for LaserScan and PointCloud2 displays
 4. The Map display should use the **default** QoS (Reliable + Transient Local) — do NOT change it to Best Effort
 
 ### Camera shows "No Image" in RViz2
 
 The Reliability Policy for the Image display must be set to **Best Effort**. The driver publishes camera frames with Best Effort QoS, and ROS 2 will not deliver messages when the subscriber (RViz2 default: Reliable) is stricter than the publisher. See [Section 5.3](#53-rviz2-camera-setup).
+
+### Unknown YAML parameter warning
+
+```
+[WARN] Parameter 'enable_interactive_mode' not declared
+[WARN] Parameter 'minimum_time_interval' not declared
+```
+
+Some parameters were added in newer versions of slam_toolbox. If you see these warnings, comment out the offending lines in the YAML:
+
+```yaml
+# enable_interactive_mode: true   ← comment this out
+# minimum_time_interval: 0.0      ← comment this out
+```
+
+The remaining parameters are still active. This does not affect mapping quality.
+
+### Rotational drift persists after enabling YAML-Tuned pipeline
+
+If the corridor after a 90° turn is still misaligned:
+
+1. **Verify YAML is being loaded** — look for `Node using stack size 40000000` in the pipeline log (this parameter only comes from the YAML, not from inline args)
+2. **Increase the angular search window**: `coarse_search_angle_offset: 0.523` (±30°)
+3. **Increase the angular penalty**: `angle_variance_penalty: 1.5`
+4. **Slow down turns** — Go2 paw slippage is worse at high angular velocity; use the controller to turn slowly
+5. **Check `minimum_travel_heading`** — if set too high (e.g. 1.0 rad), SLAM won't add new nodes during turns and has less data to correct the angle
+6. **Robot mode** — ensure the robot is in **Normal** mode, not Classic. Normal mode has less body sway, producing more stable scans during turns
