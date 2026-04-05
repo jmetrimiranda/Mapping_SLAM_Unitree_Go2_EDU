@@ -41,7 +41,15 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
    - 8.4 [TF Publisher Parameters](#84-tf-publisher-parameters)
 9. [Docker Image Tags](#9-docker-image-tags)
 10. [Saving Maps](#10-saving-maps)
-11. [Troubleshooting](#11-troubleshooting)
+11. [Segmented Mapping (Large Environments)](#11-segmented-mapping-large-environments)
+    - 11.1 [How Segmented Mapping Works](#111-how-segmented-mapping-works)
+    - 11.2 [Scripts Overview](#112-scripts-overview)
+    - 11.3 [slam_pipeline_segments.sh](#113-slam_pipeline_segmentssh)
+    - 11.4 [salvar_segmento.sh](#114-salvar_segmentosh)
+    - 11.5 [Step-by-Step Workflow](#115-step-by-step-workflow)
+    - 11.6 [Customizing Parameters](#116-customizing-parameters)
+    - 11.7 [File Structure](#117-file-structure)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -948,7 +956,410 @@ ros2 bag play /ros2_ws/session_01
 
 ---
 
-## 11. Troubleshooting
+## 11. Segmented Mapping (Large Environments)
+
+For large environments like parking garages, long corridors, or multi-floor buildings, it is often impractical to map everything in a single continuous run. The robot may need to be physically repositioned (picked up and turned) between straight-line segments. This section describes a **segmented mapping workflow** that splits the mapping session into manageable segments while building a single accumulated map.
+
+### 11.1 How Segmented Mapping Works
+
+The `slam_toolbox` serialization saves the **entire accumulated map** at the time of the call — not just the new portion. This is the key concept:
+
+```
+Segment 1: Walk corridor A → save as seg1
+            seg1 contains: [corridor A]
+
+Segment 2: Load seg1 → walk corridor B → save as seg2
+            seg2 contains: [corridor A + corridor B]
+
+Segment 3: Load seg2 → walk corridor C → save as seg3
+            seg3 contains: [corridor A + corridor B + corridor C]
+
+...and so on.
+```
+
+Each saved file is a **complete snapshot** of everything mapped so far. You always load only the **last saved segment** because it already contains all previous data. There is no need to "merge" files.
+
+> 💡 **Between segments:** Stop the pipeline (`Ctrl+C`), physically reposition the robot (pick it up, turn it to face the next corridor), then restart the pipeline loading the previous segment. The SLAM node will resume from where the map left off.
+
+### 11.2 Scripts Overview
+
+Two scripts handle the segmented workflow. Both live in `/go2_webrtc_ws/` and follow the same structure as `slam_pipeline.sh` — configurable variables at the top, same node launch pattern.
+
+| Script | Purpose |
+|---|---|
+| `slam_pipeline_segments.sh` | Starts the full pipeline for a given segment number. If segment=1, starts from scratch. If segment>1, loads the previous segment's map and continues. |
+| `salvar_segmento.sh` | Saves the current SLAM state as the specified segment number. |
+
+### 11.3 `slam_pipeline_segments.sh`
+
+Create the script inside the container:
+
+```bash
+nano /go2_webrtc_ws/slam_pipeline_segments.sh
+```
+
+Paste the following content:
+
+```bash
+#!/bin/bash
+# ============================================================
+# SLAM Pipeline — Segmented Mapping
+# Uso:
+#   bash /go2_webrtc_ws/slam_pipeline_segments.sh 1          → Segment 1 (from scratch)
+#   bash /go2_webrtc_ws/slam_pipeline_segments.sh 2          → Segment 2 (loads seg1)
+#   bash /go2_webrtc_ws/slam_pipeline_segments.sh 3 cpp      → Segment 3 (loads seg2, C++ mode)
+#   bash /go2_webrtc_ws/slam_pipeline_segments.sh 4 python   → Segment 4 (loads seg3, Python mode)
+# ============================================================
+
+SEG=${1:-""}
+MODE=${2:-python}
+ROBOT_IP="192.168.123.161"
+
+# --- Directory where segment files are stored ---
+SEG_DIR="/ros2_ws/garagem_segmentos"
+
+# --- PointCloud Slicer Parameters ---
+MIN_HEIGHT=0.5
+MAX_HEIGHT=0.8
+RANGE_MIN=0.5
+RANGE_MAX=8.0
+
+# --- SLAM Parameters ---
+MAX_LASER_RANGE=8.0
+RESOLUTION=0.05
+TRAVEL_DIST=0.2
+TRAVEL_HEADING=0.5
+LOOP_CLOSING=true
+
+# ============================================================
+# Validation
+# ============================================================
+
+if [ -z "$SEG" ]; then
+    echo "Uso: bash slam_pipeline_segments.sh SEGMENT_NUMBER [cpp|python]"
+    echo ""
+    echo "  SEGMENT_NUMBER  Segment to map (1 = from scratch, 2+ = loads previous)"
+    echo "  MODE            cpp or python (default: python)"
+    echo ""
+    echo "Examples:"
+    echo "  bash slam_pipeline_segments.sh 1          # Start fresh, Python mode"
+    echo "  bash slam_pipeline_segments.sh 2 cpp      # Load seg1, continue with C++ mode"
+    echo "  bash slam_pipeline_segments.sh 3           # Load seg2, continue with Python mode"
+    exit 1
+fi
+
+# Create output directory if it doesn't exist
+mkdir -p "$SEG_DIR"
+
+# If segment > 1, verify that the previous segment file exists
+if [ "$SEG" -gt 1 ]; then
+    PREV=$((SEG - 1))
+    if [ ! -f "${SEG_DIR}/seg${PREV}.posegraph" ]; then
+        echo "ERROR: ${SEG_DIR}/seg${PREV}.posegraph not found!"
+        echo "Save segment ${PREV} before starting segment ${SEG}."
+        echo ""
+        echo "To save:  bash /go2_webrtc_ws/salvar_segmento.sh ${PREV}"
+        exit 1
+    fi
+fi
+
+echo "================================================"
+echo "SLAM Pipeline — Segment: $SEG | Mode: $MODE"
+echo "  Slicer: min_h=$MIN_HEIGHT max_h=$MAX_HEIGHT range=[$RANGE_MIN, $RANGE_MAX]"
+echo "  SLAM:   res=$RESOLUTION travel_dist=$TRAVEL_DIST loop_closing=$LOOP_CLOSING"
+echo "  Output: $SEG_DIR"
+echo "================================================"
+
+# ============================================================
+# Kill leftover processes
+# ============================================================
+
+pkill -f "go2_driver\|voxel_decoder\|pointcloud_to_laser\|slam_tool\|static_transform"
+sleep 2
+
+# ============================================================
+# 1. WebRTC Driver
+# ============================================================
+
+if [ "$MODE" = "cpp" ]; then
+    echo "[1/5] Starting driver (C++ mode, decode_lidar=false)..."
+    export LD_LIBRARY_PATH=/opt/wasmtime/lib:$LD_LIBRARY_PATH
+    ros2 run go2_robot_sdk go2_driver_node --ros-args \
+        -p conn_type:="webrtc" -p robot_ip:="$ROBOT_IP" \
+        -p enable_video:=false \
+        -p decode_lidar:=false -p publish_raw_voxel:=true &
+    sleep 10
+
+    echo "[2/5] Starting C++ voxel decoder..."
+    ros2 run voxel_decoder_cpp voxel_decoder_node &
+    sleep 5
+else
+    echo "[1/5] Starting driver (Python mode, decode_lidar=true)..."
+    ros2 run go2_robot_sdk go2_driver_node --ros-args \
+        -p conn_type:="webrtc" -p robot_ip:="$ROBOT_IP" \
+        -p enable_video:=false \
+        -p decode_lidar:=true -p publish_raw_voxel:=false &
+    sleep 10
+
+    echo "[2/5] (Skipped — Python mode, no C++ decoder needed)"
+fi
+
+# ============================================================
+# 3. TF Publisher
+# ============================================================
+
+echo "[3/5] Starting TF publisher..."
+ros2 run tf2_ros static_transform_publisher \
+    0.289 0.0 0.08 0.0 0.0 0.0 base_link utlidar_lidar &
+sleep 2
+
+# ============================================================
+# 4. PointCloud Slicer
+# ============================================================
+
+echo "[4/5] Starting pointcloud_to_laserscan..."
+ros2 run pointcloud_to_laserscan pointcloud_to_laserscan_node --ros-args \
+    -p target_frame:=utlidar_lidar \
+    -p min_height:=$MIN_HEIGHT -p max_height:=$MAX_HEIGHT \
+    -p range_min:=$RANGE_MIN -p range_max:=$RANGE_MAX \
+    -r cloud_in:=/point_cloud2 &
+sleep 2
+
+# ============================================================
+# 5. SLAM — with or without map loading
+# ============================================================
+
+if [ "$SEG" -eq 1 ]; then
+    echo "[5/5] Starting SLAM (segment 1 — from scratch)..."
+    ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
+        -p odom_frame:=odom -p base_frame:=base_link -p map_frame:=map \
+        -p max_laser_range:=$MAX_LASER_RANGE -p resolution:=$RESOLUTION \
+        -p minimum_travel_distance:=$TRAVEL_DIST \
+        -p minimum_travel_heading:=$TRAVEL_HEADING \
+        -p do_loop_closing:=$LOOP_CLOSING &
+else
+    PREV=$((SEG - 1))
+    echo "[5/5] Starting SLAM (segment $SEG — loading seg${PREV} which contains segments 1-${PREV})..."
+    ros2 run slam_toolbox async_slam_toolbox_node --ros-args \
+        -p odom_frame:=odom -p base_frame:=base_link -p map_frame:=map \
+        -p max_laser_range:=$MAX_LASER_RANGE -p resolution:=$RESOLUTION \
+        -p minimum_travel_distance:=$TRAVEL_DIST \
+        -p minimum_travel_heading:=$TRAVEL_HEADING \
+        -p do_loop_closing:=$LOOP_CLOSING \
+        -p map_file_name:=${SEG_DIR}/seg${PREV} \
+        -p map_start_at_dock:=true &
+fi
+
+sleep 3
+echo "================================================"
+echo "Segment $SEG running!"
+echo ""
+echo "Open RViz2 in another terminal:"
+echo "  source /env_ros2.sh && rviz2"
+echo ""
+echo "When done walking, save with:"
+echo "  bash /go2_webrtc_ws/salvar_segmento.sh $SEG"
+echo "================================================"
+wait
+```
+
+Save with `Ctrl+O`, `Enter`, `Ctrl+X`. Then make it executable:
+
+```bash
+chmod +x /go2_webrtc_ws/slam_pipeline_segments.sh
+```
+
+### 11.4 `salvar_segmento.sh`
+
+Create the save script:
+
+```bash
+nano /go2_webrtc_ws/salvar_segmento.sh
+```
+
+Paste the following content:
+
+```bash
+#!/bin/bash
+# ============================================================
+# Save current SLAM state as a segment
+# Uso:
+#   bash /go2_webrtc_ws/salvar_segmento.sh 1    → Saves as seg1
+#   bash /go2_webrtc_ws/salvar_segmento.sh 2    → Saves as seg2
+# ============================================================
+
+SEG=${1:-""}
+
+# --- Directory where segment files are stored ---
+SEG_DIR="/ros2_ws/garagem_segmentos"
+
+if [ -z "$SEG" ]; then
+    echo "Uso: bash salvar_segmento.sh SEGMENT_NUMBER"
+    echo "  Saves the current SLAM map as seg<N> in $SEG_DIR"
+    exit 1
+fi
+
+source /env_ros2.sh
+
+mkdir -p "$SEG_DIR"
+
+echo "Saving segment $SEG to ${SEG_DIR}/seg${SEG}..."
+
+ros2 service call /slam_toolbox/serialize_map \
+    slam_toolbox/srv/SerializePoseGraph \
+    "{filename: '${SEG_DIR}/seg${SEG}'}"
+
+if [ $? -eq 0 ]; then
+    echo "================================================"
+    echo "Segment $SEG saved!"
+    echo "  Files: ${SEG_DIR}/seg${SEG}.posegraph"
+    echo "         ${SEG_DIR}/seg${SEG}.data"
+    echo ""
+    echo "This file contains ALL map data from segments 1 through $SEG."
+    echo ""
+    NEXT=$((SEG + 1))
+    echo "To continue mapping:"
+    echo "  1. Ctrl+C the pipeline"
+    echo "  2. Reposition the robot"
+    echo "  3. bash /go2_webrtc_ws/slam_pipeline_segments.sh $NEXT"
+    echo "================================================"
+else
+    echo "ERROR: Failed to save segment $SEG. Is the SLAM node running?"
+fi
+```
+
+Save and make executable:
+
+```bash
+chmod +x /go2_webrtc_ws/salvar_segmento.sh
+```
+
+### 11.5 Step-by-Step Workflow
+
+This example maps a parking garage in 6 straight-line segments. Between each segment, the robot is physically picked up and turned to face the next corridor.
+
+> ⚠️ **Prerequisites:** Host network configured ([Section 1.3](#13-host-network-setup)), container running, `source /env_ros2.sh` in all terminals.
+
+#### Segment 1 — First corridor (from scratch)
+
+**Terminal 1:**
+```bash
+source /env_ros2.sh
+bash /go2_webrtc_ws/slam_pipeline_segments.sh 1
+```
+
+**Terminal 2:**
+```bash
+source /env_ros2.sh && rviz2
+```
+
+Walk the robot straight through the first corridor. When done, stop the robot.
+
+**Terminal 3:**
+```bash
+source /env_ros2.sh
+bash /go2_webrtc_ws/salvar_segmento.sh 1
+```
+
+Press `Ctrl+C` in Terminal 1 to stop the pipeline. Pick up the robot and turn it to face the next corridor.
+
+#### Segment 2 — Second corridor (loads seg1)
+
+**Terminal 1:**
+```bash
+source /env_ros2.sh
+bash /go2_webrtc_ws/slam_pipeline_segments.sh 2
+```
+
+Walk the robot straight. Stop. Save:
+
+**Terminal 3:**
+```bash
+bash /go2_webrtc_ws/salvar_segmento.sh 2
+```
+
+`Ctrl+C` in Terminal 1. Reposition the robot.
+
+#### Segments 3–6 — Repeat
+
+Continue the same pattern:
+
+```bash
+# Terminal 1: start segment N
+bash /go2_webrtc_ws/slam_pipeline_segments.sh 3
+
+# Terminal 3: save segment N (after walking)
+bash /go2_webrtc_ws/salvar_segmento.sh 3
+
+# Ctrl+C, reposition, then:
+bash /go2_webrtc_ws/slam_pipeline_segments.sh 4
+bash /go2_webrtc_ws/salvar_segmento.sh 4
+
+# ...and so on until segment 6
+bash /go2_webrtc_ws/slam_pipeline_segments.sh 6
+bash /go2_webrtc_ws/salvar_segmento.sh 6
+```
+
+After saving segment 6, `seg6.posegraph` contains the complete map of all 6 corridors.
+
+#### Export the final map as an image
+
+```bash
+source /env_ros2.sh
+ros2 run nav2_map_server map_saver_cli -f /ros2_ws/garagem_segmentos/mapa_final
+```
+
+### 11.6 Customizing Parameters
+
+All tuning parameters are defined as variables at the top of `slam_pipeline_segments.sh`. Edit the file to adjust for your environment:
+
+```bash
+nano /go2_webrtc_ws/slam_pipeline_segments.sh
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `SEG_DIR` | `/ros2_ws/garagem_segmentos` | Directory for segment files. Change to organize different mapping sessions. |
+| `MIN_HEIGHT` | `0.5` | Bottom of the scan band (meters above LiDAR). Higher than default to avoid ground noise in parking garages. |
+| `MAX_HEIGHT` | `0.8` | Top of the scan band. Captures pillars and walls at waist height. |
+| `RANGE_MIN` | `0.5` | Dead zone radius. Filters robot body noise. |
+| `RANGE_MAX` | `8.0` | Maximum detection distance. |
+| `RESOLUTION` | `0.05` | Map resolution (5cm/cell). |
+| `TRAVEL_DIST` | `0.2` | Distance between scan insertions. Lower than default for more detail in straight corridors. |
+| `TRAVEL_HEADING` | `0.5` | Rotation between scan insertions. Higher than default since the robot walks straight. |
+| `LOOP_CLOSING` | `true` | Enable loop closure detection. Helps when segments revisit previously mapped areas. |
+
+> 💡 These defaults are tuned for **parking garages and large indoor corridors** (`min_height:=0.5`, `max_height:=0.8`). For other environments, refer to the [Environment Profiles](#62-environment-profiles) in the LiDAR Tuning Guide.
+
+### 11.7 File Structure
+
+After mapping 6 segments, the output directory looks like:
+
+```
+/ros2_ws/garagem_segmentos/
+├── seg1.posegraph          # Segment 1 only
+├── seg1.data
+├── seg2.posegraph          # Segments 1 + 2
+├── seg2.data
+├── seg3.posegraph          # Segments 1 + 2 + 3
+├── seg3.data
+├── seg4.posegraph          # Segments 1 + 2 + 3 + 4
+├── seg4.data
+├── seg5.posegraph          # Segments 1 + 2 + 3 + 4 + 5
+├── seg5.data
+├── seg6.posegraph          # Complete map (all 6 segments)
+├── seg6.data
+├── mapa_final.pgm          # Exported occupancy grid image
+└── mapa_final.yaml         # Map metadata
+```
+
+> **Note:** Each `segN` file is a complete snapshot. You can safely delete intermediate files (seg1–seg5) after confirming the final map is correct. Keep `seg6` as it is the complete accumulated map.
+
+> **Note:** Since the workspace is mounted via Docker volume (`./workspace:/ros2_ws`), all files in `/ros2_ws/` are persisted on your host machine at `~/unitree_slam/workspace/`.
+
+---
+
+## 12. Troubleshooting
 
 ### `No route to host` / `Failed to get robot public key`
 
