@@ -1091,31 +1091,80 @@ sudo docker exec -it dev_unitree_go2 bash
 ### Save current map as image
 
 ```bash
-docker exec -it dev_unitree_go2 bash
-source /env_ros2.sh
-ros2 run nav2_map_server map_saver_cli -f /ros2_ws/my_map_name
+docker exec dev_unitree_go2 bash -c "
+  source /env_ros2.sh &&
+  mkdir -p /ros2_ws/mapa_garagem &&
+  ros2 run nav2_map_server map_saver_cli -f /ros2_ws/mapa_garagem/mapa1
+"
 ```
 
-> **Note:** Always save to `/ros2_ws` to ensure the files are persisted on your host machine (mounted via Docker volume).
+> **Note:** Always save to `/ros2_ws` to ensure the files are persisted on your host machine (mounted via Docker volume at `~/unitree_slam/workspace/`).
 
 This generates two files:
-- `my_map_name.pgm` — The occupancy grid image
-- `my_map_name.yaml` — Map metadata (resolution, origin, etc.)
+- `mapa1.pgm` — The occupancy grid image
+- `mapa1.yaml` — Map metadata (resolution, origin, etc.)
+
+---
 
 ### Save SLAM state (to continue mapping later)
 
 ```bash
-ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/ros2_ws/my_map'}"
+docker exec dev_unitree_go2 bash -c "
+  source /env_ros2.sh &&
+  ros2 service call /slam_toolbox/serialize_map \
+    slam_toolbox/srv/SerializePoseGraph \
+    \"{filename: '/ros2_ws/mapa_garagem/mapa1'}\"
+"
 ```
+
+This generates two additional files:
+- `mapa1.posegraph` — Full pose graph (~13 MB for a garage-sized map)
+- `mapa1.data` — Associated scan data (~1.4 MB)
+
+---
+
+### Confirm all 4 files were created
+
+```bash
+docker exec dev_unitree_go2 ls -lh /ros2_ws/mapa_garagem/
+# Expected:
+# mapa1.pgm        ~55 KB
+# mapa1.yaml       ~144 B
+# mapa1.posegraph  ~13 MB
+# mapa1.data       ~1.4 MB
+```
+
+---
+
+### Copy map to host for inspection
+
+```bash
+docker cp dev_unitree_go2:/ros2_ws/mapa_garagem/mapa1.pgm ~/Downloads/mapa1.pgm
+eog ~/Downloads/mapa1.pgm
+```
+
+---
 
 ### Load saved map and continue mapping
 
 Add to the SLAM node launch:
 
 ```bash
--p map_file_name:=/ros2_ws/my_map \
+-p map_file_name:=/ros2_ws/mapa_garagem/mapa1 \
 -p map_start_at_dock:=true
 ```
+
+---
+
+### Restart container before a new session
+
+Always restart the container after saving to clear DDS memory and avoid ghost maps:
+
+```bash
+docker restart dev_unitree_go2
+```
+
+---
 
 ### Record raw data (rosbag)
 
@@ -1128,9 +1177,6 @@ Replay later:
 ```bash
 ros2 bag play /ros2_ws/session_01
 ```
-
----
-
 ## 11. Segmented Mapping (Large Environments)
 
 For large environments like parking garages, long corridors, power plants, or multi-floor buildings, it is often impractical to map everything in a single continuous run. The robot may need to be physically repositioned (picked up and turned) between straight-line segments. This section describes a **segmented mapping workflow** that splits the mapping session into manageable segments while building a single accumulated map.
