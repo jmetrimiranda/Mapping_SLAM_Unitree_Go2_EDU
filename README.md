@@ -42,26 +42,37 @@ Source code for the WebRTC and Unitree Go2 EDU SDK, featuring custom camera cali
    - 8.4 [TF Publisher Parameters](#84-tf-publisher-parameters)
 9. [Docker Image Tags](#9-docker-image-tags)
 10. [Saving Maps](#10-saving-maps)
-11. [Segmented Mapping (Large Environments)](#11-segmented-mapping-large-environments)
-    - 11.1 [How Segmented Mapping Works](#111-how-segmented-mapping-works)
-    - 11.2 [Scripts Overview](#112-scripts-overview)
-    - 11.3 [slam_pipeline_segments.sh](#113-slam_pipeline_segmentssh)
-    - 11.4 [salvar_segmento.sh](#114-salvar_segmentosh)
-    - 11.5 [Step-by-Step Workflow](#115-step-by-step-workflow)
-    - 11.6 [Customizing Parameters](#116-customizing-parameters)
-    - 11.7 [File Structure](#117-file-structure)
-12. [YAML Parameter Reference — Advanced Tuning](#12-yaml-parameter-reference--advanced-tuning)
-    - 12.1 [Why the YAML Mode Matters](#121-why-the-yaml-mode-matters)
-    - 12.2 [Frames and Topics](#122-frames-and-topics)
-    - 12.3 [Map Quality](#123-map-quality)
-    - 12.4 [Scan Insertion](#124-scan-insertion)
-    - 12.5 [Angular Drift Correction — Critical Parameters](#125-angular-drift-correction--critical-parameters)
-    - 12.6 [Scan Matching Correlation Space](#126-scan-matching-correlation-space)
-    - 12.7 [Loop Closure](#127-loop-closure)
-    - 12.8 [Solver (Ceres)](#128-solver-ceres)
-    - 12.9 [Response Expansion](#129-response-expansion)
-    - 12.10 [Complete YAML — Power Plant Profile](#1210-complete-yaml--power-plant-profile)
-13. [Troubleshooting](#13-troubleshooting)
+11. [Autonomous Navigation (Nav2)](#11-autonomous-navigation-nav2)
+    - 11.1 [How Nav2 Works With a Saved Map](#111-how-nav2-works-with-a-saved-map)
+    - 11.2 [Prerequisites](#112-prerequisites)
+    - 11.3 [Files Involved and What Each Does](#113-files-involved-and-what-each-does)
+    - 11.4 [What to Change When Using a New Map Folder](#114-what-to-change-when-using-a-new-map-folder)
+    - 11.5 [Running the Navigation Pipeline](#115-running-the-navigation-pipeline)
+    - 11.6 [RViz2 Setup for Navigation](#116-rviz2-setup-for-navigation)
+    - 11.7 [Performing Autonomous Navigation](#117-performing-autonomous-navigation)
+    - 11.8 [Verifying the Pipeline is Healthy](#118-verifying-the-pipeline-is-healthy)
+    - 11.9 [Confirmed Working Indicators](#119-confirmed-working-indicators)
+    - 11.10 [Troubleshooting Nav2](#1110-troubleshooting-nav2)
+12. [Segmented Mapping (Large Environments)](#12-segmented-mapping-large-environments)
+    - 12.1 [How Segmented Mapping Works](#121-how-segmented-mapping-works)
+    - 12.2 [Scripts Overview](#122-scripts-overview)
+    - 12.3 [slam_pipeline_segments.sh](#123-slam_pipeline_segmentssh)
+    - 12.4 [salvar_segmento.sh](#124-salvar_segmentosh)
+    - 12.5 [Step-by-Step Workflow](#125-step-by-step-workflow)
+    - 12.6 [Customizing Parameters](#126-customizing-parameters)
+    - 12.7 [File Structure](#127-file-structure)
+13. [YAML Parameter Reference — Advanced Tuning](#13-yaml-parameter-reference--advanced-tuning)
+    - 13.1 [Why the YAML Mode Matters](#131-why-the-yaml-mode-matters)
+    - 13.2 [Frames and Topics](#132-frames-and-topics)
+    - 13.3 [Map Quality](#133-map-quality)
+    - 13.4 [Scan Insertion](#134-scan-insertion)
+    - 13.5 [Angular Drift Correction — Critical Parameters](#135-angular-drift-correction--critical-parameters)
+    - 13.6 [Scan Matching Correlation Space](#136-scan-matching-correlation-space)
+    - 13.7 [Loop Closure](#137-loop-closure)
+    - 13.8 [Solver (Ceres)](#138-solver-ceres)
+    - 13.9 [Response Expansion](#139-response-expansion)
+    - 13.10 [Complete YAML — Power Plant Profile](#1310-complete-yaml--power-plant-profile)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -617,7 +628,7 @@ docker exec -it dev_unitree_go2 bash -c \
   "source /env_ros2.sh && bash /go2_webrtc_ws/slam_pipeline_v2.sh"
 ```
 
-See [Section 12](#12-yaml-parameter-reference--advanced-tuning) for the complete parameter reference with explanations tailored for industrial environments.
+See [Section 13](#13-yaml-parameter-reference--advanced-tuning) for the complete parameter reference with explanations tailored for industrial environments.
 
 ---
 
@@ -729,7 +740,7 @@ minimum_travel_heading:  0.5     # ~28° before a turn adds a new node
 max_laser_range:         12.0    # must match range_max
 do_loop_closing:         true    # essential — power plants have ring corridors around tanks
 loop_search_maximum_distance: 5.0  # increased for large ring-shaped corridors
-angle_variance_penalty:        1.0    # strong angular correction (see Section 12.5)
+angle_variance_penalty:        1.0    # strong angular correction (see Section 13.5)
 coarse_search_angle_offset:    0.349  # ±20° search — handles slippage on smooth floors
 use_response_expansion:        true   # recovers when floor is too smooth for features
 ```
@@ -738,7 +749,7 @@ use_response_expansion:        true   # recovers when floor is too smooth for fe
 - Metal gratings, pipes, and tanks cause point cloud noise → keep `range_min ≥ 0.3`
 - If corridors are wider than 8m (between tanks), increase `loop_search_maximum_distance` to `8.0`
 - For ring corridors (walking around a tank), loop closure at return will snap the map — keep `do_loop_closing: true`
-- For very long corridors (>50m): use [Segmented Mapping](#11-segmented-mapping-large-environments)
+- For very long corridors (>50m): use [Segmented Mapping](#12-segmented-mapping-large-environments)
 - Robot mode: use **Normal** (not Classic) for smoother gait — less body sway = more stable scans
 
 #### 🅿️ Parking Garage / Underground Structure
@@ -1033,7 +1044,7 @@ These control how the 3D point cloud is "sliced" into a 2D laser scan for SLAM.
 
 #### YAML-Tuned mode (slam_pipeline_v2.sh) — 40+ parameters from YAML file:
 
-See [Section 12](#12-yaml-parameter-reference--advanced-tuning) for the complete reference.
+See [Section 13](#13-yaml-parameter-reference--advanced-tuning) for the complete reference.
 
 ### 8.4 TF Publisher Parameters
 
@@ -1093,8 +1104,8 @@ sudo docker exec -it dev_unitree_go2 bash
 ```bash
 docker exec dev_unitree_go2 bash -c "
   source /env_ros2.sh &&
-  mkdir -p /ros2_ws/mapa_garagem &&
-  ros2 run nav2_map_server map_saver_cli -f /ros2_ws/mapa_garagem/mapa1
+  mkdir -p /ros2_ws/mapa_garagem1 &&
+  ros2 run nav2_map_server map_saver_cli -f /ros2_ws/mapa_garagem1/mapa1
 "
 ```
 
@@ -1113,7 +1124,7 @@ docker exec dev_unitree_go2 bash -c "
   source /env_ros2.sh &&
   ros2 service call /slam_toolbox/serialize_map \
     slam_toolbox/srv/SerializePoseGraph \
-    \"{filename: '/ros2_ws/mapa_garagem/mapa1'}\"
+    \"{filename: '/ros2_ws/mapa_garagem1/mapa1'}\"
 "
 ```
 
@@ -1126,7 +1137,7 @@ This generates two additional files:
 ### Confirm all 4 files were created
 
 ```bash
-docker exec dev_unitree_go2 ls -lh /ros2_ws/mapa_garagem/
+docker exec dev_unitree_go2 ls -lh /ros2_ws/mapa_garagem1/
 # Expected:
 # mapa1.pgm        ~55 KB
 # mapa1.yaml       ~144 B
@@ -1139,7 +1150,7 @@ docker exec dev_unitree_go2 ls -lh /ros2_ws/mapa_garagem/
 ### Copy map to host for inspection
 
 ```bash
-docker cp dev_unitree_go2:/ros2_ws/mapa_garagem/mapa1.pgm ~/Downloads/mapa1.pgm
+docker cp dev_unitree_go2:/ros2_ws/mapa_garagem1/mapa1.pgm ~/Downloads/mapa1.pgm
 eog ~/Downloads/mapa1.pgm
 ```
 
@@ -1150,7 +1161,7 @@ eog ~/Downloads/mapa1.pgm
 Add to the SLAM node launch:
 
 ```bash
--p map_file_name:=/ros2_ws/mapa_garagem/mapa1 \
+-p map_file_name:=/ros2_ws/mapa_garagem1/mapa1 \
 -p map_start_at_dock:=true
 ```
 
@@ -1177,11 +1188,423 @@ Replay later:
 ```bash
 ros2 bag play /ros2_ws/session_01
 ```
-## 11. Segmented Mapping (Large Environments)
+
+---
+
+## 11. Autonomous Navigation (Nav2)
+
+This section explains how to use a previously saved map to perform **fully autonomous navigation** — where you give the robot a goal position and it plans and executes its own path, avoiding obstacles in real time.
+
+> ⚠️ **Prerequisite:** You must have completed a mapping session using `slam_pipeline_v2.sh` (see [Section 4.4](#44-yaml-tuned-mode--industrial--power-plant-recommended)) and saved all 4 map files using the procedure in [Section 10](#10-saving-maps) before proceeding.
+
+### 11.1 How Nav2 Works With a Saved Map
+
+The key difference between **mapping mode** and **navigation mode** is the role of the slam_toolbox:
+
+| Mode | slam_toolbox role | Map |
+|---|---|---|
+| Mapping (`slam_pipeline_v2.sh`) | **Builds** the map from scratch | Grows as robot walks |
+| Navigation (`nav_pipeline_navigation.sh`) | **Localizes** the robot in the existing map | Fixed — read from disk |
+
+In navigation mode, slam_toolbox switches from `mode: mapping` to `mode: localization`. It loads the `.posegraph` file saved in Section 10 and uses incoming LiDAR scans to continuously compute **where the robot is** within that fixed map. Nav2 uses this position to plan paths and send velocity commands (`/cmd_vel`) to the `go2_driver_node`, which translates them into physical movement.
+
+```
+Saved map on disk (.posegraph)
+         │
+         ▼
+slam_toolbox (localization) ←── /scan (LiDAR)
+         │
+         │ TF: map → odom → base_link
+         ▼
+Nav2 Stack
+  ├── global_costmap  (full map + obstacles)
+  ├── local_costmap   (nearby obstacles, rolling window)
+  ├── planner_server  (computes global path)
+  ├── controller_server (executes path, avoids obstacles)
+  └── bt_navigator    (high-level logic, recoveries)
+         │
+         │ /cmd_vel
+         ▼
+go2_driver_node ──→ Unitree Go2 EDU (moves physically)
+```
+
+### 11.2 Prerequisites
+
+Before running the navigation pipeline, confirm all 4 map files exist:
+
+```bash
+docker exec dev_unitree_go2 ls -lh /ros2_ws/mapa_garagem1/
+# Must show:
+# mapa1.pgm        ← occupancy grid image
+# mapa1.yaml       ← map metadata
+# mapa1.posegraph  ← SLAM pose graph (loaded by localization)
+# mapa1.data       ← associated scan data
+```
+
+If any file is missing, redo the mapping session (Section 4.4) and save steps (Section 10).
+
+Also confirm the network is active before starting (on the Alienware host, outside Docker):
+
+```bash
+./on_network.sh
+ping -c 2 192.168.123.161   # must succeed
+```
+
+### 11.3 Files Involved and What Each Does
+
+The navigation pipeline uses **three configuration files** inside the container. Understanding each one is important — if you create a new map in a different folder, all three must be updated.
+
+| File | Location | Purpose |
+|---|---|---|
+| `nav_pipeline_navigation.sh` | `/go2_webrtc_ws/` | Launch script: starts all nodes in the correct order |
+| `localization_params.yaml` | `/go2_webrtc_ws/` | slam_toolbox config in `localization` mode — points to the `.posegraph` file |
+| `nav2_params.yaml` | `/go2_webrtc_ws/` | Nav2 stack config — velocities, costmaps, planners, map server path |
+
+#### `nav_pipeline_navigation.sh` — the main script
+
+```bash
+#!/bin/bash
+ROBOT_IP="192.168.123.161"
+MAP_FILE="/ros2_ws/mapa_garagem1/mapa1"          # ← path to map (without extension)
+SLAM_PARAMS="/go2_webrtc_ws/localization_params.yaml"
+NAV2_PARAMS="/go2_webrtc_ws/nav2_params.yaml"
+```
+
+The script starts 5 components in order:
+1. `go2_driver_node` — connects to robot, receives LiDAR, listens to `/cmd_vel`
+2. TF publishers — `base_link → utlidar_lidar` and `base_link → base_footprint`
+3. `pointcloud_to_laserscan` — same slicer parameters as mapping
+4. `slam_toolbox` in localization mode — loads posegraph, localizes robot
+5. `nav2_bringup` — full Nav2 stack (planner + controller + bt_navigator)
+
+#### `localization_params.yaml` — slam_toolbox localization config
+
+This file is a copy of `mapper_params_online_async.yaml` with three lines changed:
+
+```yaml
+mode: localization               # was: mapping
+map_file_name: /ros2_ws/mapa_garagem1/mapa1   # path to posegraph (without extension)
+map_start_at_dock: true          # robot starts at the origin of the saved map
+```
+
+All other parameters (angular correction, scan matching, loop closure) remain the same as during mapping — this ensures localization uses the same quality settings that produced the map.
+
+#### `nav2_params.yaml` — Nav2 configuration
+
+Key sections relevant to the Go2 EDU:
+
+```yaml
+map_server:
+  ros__parameters:
+    yaml_filename: "/ros2_ws/mapa_garagem1/mapa1.yaml"  # ← .yaml map file
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 3.0    # conservative — avoids control loop overload
+    FollowPath:
+      max_vel_x: 0.3             # m/s — safe for Go2 EDU indoors
+      max_vel_theta: 0.5         # rad/s — gentle turns
+```
+
+### 11.4 What to Change When Using a New Map Folder
+
+Every time you create a new map in a new folder (e.g., `/ros2_ws/mapa_usina/mapa1`), you must update **3 locations** inside the container before running navigation. This is the most common source of errors.
+
+#### Step 1 — Update `nav_pipeline_navigation.sh`
+
+```bash
+nano /go2_webrtc_ws/nav_pipeline_navigation.sh
+```
+
+Change the `MAP_FILE` line at the top:
+
+```bash
+# Example: changing from garage map to power plant map
+MAP_FILE="/ros2_ws/mapa_usina/mapa1"    # ← update this
+```
+
+Or use `sed` to do it without opening the editor:
+
+```bash
+sed -i 's|MAP_FILE=.*|MAP_FILE="/ros2_ws/mapa_usina/mapa1"|' \
+  /go2_webrtc_ws/nav_pipeline_navigation.sh
+
+# Confirm:
+grep MAP_FILE /go2_webrtc_ws/nav_pipeline_navigation.sh
+```
+
+#### Step 2 — Update `localization_params.yaml`
+
+```bash
+nano /go2_webrtc_ws/localization_params.yaml
+```
+
+Change the `map_file_name` line:
+
+```yaml
+map_file_name: /ros2_ws/mapa_usina/mapa1    # ← update this (no extension)
+```
+
+Or use `sed`:
+
+```bash
+sed -i 's|map_file_name:.*|map_file_name: /ros2_ws/mapa_usina/mapa1|' \
+  /go2_webrtc_ws/localization_params.yaml
+
+# Confirm:
+grep map_file_name /go2_webrtc_ws/localization_params.yaml
+```
+
+#### Step 3 — Update `nav2_params.yaml`
+
+```bash
+nano /go2_webrtc_ws/nav2_params.yaml
+```
+
+Find the `map_server` section and change `yaml_filename`:
+
+```yaml
+map_server:
+  ros__parameters:
+    yaml_filename: "/ros2_ws/mapa_usina/mapa1.yaml"    # ← update this (WITH .yaml extension)
+```
+
+Or use `sed`:
+
+```bash
+sed -i 's|yaml_filename:.*|yaml_filename: "/ros2_ws/mapa_usina/mapa1.yaml"|' \
+  /go2_webrtc_ws/nav2_params.yaml
+
+# Confirm:
+grep yaml_filename /go2_webrtc_ws/nav2_params.yaml
+```
+
+#### Summary table — what changes per file
+
+| File | What to change | Extension |
+|---|---|---|
+| `nav_pipeline_navigation.sh` | `MAP_FILE` variable | none |
+| `localization_params.yaml` | `map_file_name` parameter | none |
+| `nav2_params.yaml` | `yaml_filename` in `map_server` | `.yaml` |
+
+> ⚠️ **`localization_params.yaml` and `nav_pipeline_navigation.sh` use the path WITHOUT extension.** `nav2_params.yaml` uses the path WITH `.yaml` extension. This asymmetry is a common source of errors.
+
+### 11.5 Running the Navigation Pipeline
+
+#### Pré-requisito — on the Alienware host (outside Docker)
+
+```bash
+docker start dev_unitree_go2
+./on_network.sh
+```
+
+#### Terminal 1 — Navigation pipeline
+
+```bash
+docker exec -it dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && bash /go2_webrtc_ws/nav_pipeline_navigation.sh"
+```
+
+The startup takes approximately 20–30 seconds. Wait for these confirmations in the log before proceeding:
+
+```
+[go2_driver_node]: Robot 0 validated and ready        ← robot connected
+[slam_toolbox]: Node using stack size 40000000         ← localization_params.yaml was read
+[slam_toolbox]: Using solver plugin solver_plugins::CeresSolver  ← Ceres active
+Registering sensor: [Custom Described Lidar]           ← LiDAR registered
+[bt_navigator]: Creating                               ← Nav2 active
+[controller_server]: Controller Server has FollowPath  ← planner active
+[lifecycle_manager]: All requested nodes are active    ← Nav2 fully up
+```
+
+> ⚠️ If you see `[bt_navigator] [FATAL]: cannot open shared object file` for any plugin, that plugin is not available in this version of Nav2/Foxy. Remove the offending line from the `plugin_lib_names` list in `nav2_params.yaml` and restart.
+
+#### Terminal 2 — RViz2
+
+```bash
+docker exec -it dev_unitree_go2 bash -c "source /env_ros2.sh && rviz2"
+```
+
+### 11.6 RViz2 Setup for Navigation
+
+Configure RViz2 in this exact order after it opens:
+
+1. **Fixed Frame** → set to `map` (top-left dropdown)
+2. **Add** → By topic → `/map` → **Map** → OK
+   - Leave QoS as default: Reliable + Transient Local
+   - The map may take 10–20 seconds to appear (posegraph loading)
+3. **Add** → By display type → **LaserScan** → OK
+   - Topic: `/scan`
+   - Reliability Policy: **Best Effort**
+4. **Add** → By display type → **RobotModel** → OK
+   - Shows the physical model of the Go2 in the map
+5. (Optional) **Add** → By display type → **Path** → OK
+   - Topic: `/plan`
+   - Shows the planned path when a goal is set
+
+> ⚠️ The map will appear as it was when you saved it — static, not updating. This is correct. Only the robot's position (laser scan overlay) moves as the robot moves.
+
+### 11.7 Performing Autonomous Navigation
+
+#### Step 1 — Set initial pose (2D Pose Estimate)
+
+The robot does not automatically know where it is in the map. You must tell it.
+
+1. In the RViz2 toolbar, click **"2D Pose Estimate"**
+2. Click on the map at the exact location where the robot **physically is right now**
+3. Hold and drag the mouse in the direction the robot **is currently facing**
+4. Release
+
+You will see the laser scan (red/orange dots) overlay on the map. **The scan must align with the walls.** If the dots are floating in the middle of a room or far from the walls, the pose estimate is wrong — repeat this step.
+
+> 💡 **Tip:** Position the robot at an easily recognizable feature in the map (a corner, a doorway, a pillar) before setting the pose estimate. This makes alignment much easier.
+
+#### Step 2 — Verify alignment
+
+After setting the pose estimate, check:
+
+```bash
+# In a third terminal — verify scan is being received
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 topic hz /scan"
+# Must show ~4-5 Hz (Python mode)
+
+# Verify localization is publishing the TF
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 run tf2_ros tf2_echo map base_link"
+# Must show a transform — if it hangs, localization is not working
+```
+
+#### Step 3 — Set navigation goal (Nav2 Goal)
+
+Once the laser scan aligns with the walls:
+
+1. In the RViz2 toolbar, click **"Nav2 Goal"**
+2. Click on a **white area** of the map (free space) — not on a wall (black) or unknown area (grey)
+3. Hold and drag to set the robot's desired final orientation
+4. Release
+
+The robot will:
+- Plan a global path (shown as a line in RViz2 if the Path display is added)
+- Begin walking toward the goal
+- Avoid obstacles detected by the LiDAR in real time
+
+> ⚠️ **Safety:** Stay close to the robot during the first navigation attempt. Any of these behaviors indicate a problem that requires intervention: spinning in circles continuously, walking directly into a wall, or not moving at all. In all cases, the most likely cause is an incorrect 2D Pose Estimate — repeat Step 1 with more precision.
+
+#### Step 4 — Reaching the goal
+
+When the robot reaches the goal position and orientation, Nav2 will stop the robot and report success. You can then set a new goal.
+
+### 11.8 Verifying the Pipeline is Healthy
+
+Run these checks in a new terminal (`docker exec -it dev_unitree_go2 bash`, then `source /env_ros2.sh`):
+
+```bash
+# Scan arriving?
+ros2 topic hz /scan
+# Expected: ~4-5 Hz (Python) or ~7 Hz (C++)
+
+# Map published?
+ros2 topic hz /map
+# Expected: ~0.2 Hz (once every 5 seconds)
+
+# Nav2 receiving velocity commands?
+ros2 topic hz /cmd_vel
+# Expected: 0 when idle, ~3 Hz when navigating
+
+# All Nav2 nodes active?
+ros2 node list | grep -E "controller|planner|bt_nav|slam_toolbox"
+# Expected: all 4 nodes listed
+
+# Localization working (TF from map to base_link)?
+ros2 run tf2_ros tf2_echo map base_link
+# Expected: shows a transform. If it hangs → localization failed to load map.
+```
+
+### 11.9 Confirmed Working Indicators
+
+When the full pipeline starts correctly, these lines appear in sequence in the log:
+
+```
+[go2_driver_node]: Robot 0 validated and ready         ← robot connected via WebRTC
+[slam_toolbox]: Node using stack size 40000000          ← localization_params.yaml loaded
+[slam_toolbox]: Using solver plugin solver_plugins::CeresSolver
+[slam_toolbox]: CeresSolver: Using SCHUR_JACOBI preconditioner.
+Registering sensor: [Custom Described Lidar]            ← LiDAR registered in localization
+[controller_server]: Controller frequency set to 3.0Hz  ← nav2_params.yaml read
+[planner_server]: Created global planner plugin GridBased
+[bt_navigator]: Creating                                ← BT navigator active
+[lifecycle_manager]: All requested nodes are active and running  ← Nav2 fully up
+[global_costmap]: StaticLayer: Resizing costmap to NNN X MMM   ← map loaded into costmap
+```
+
+### 11.10 Troubleshooting Nav2
+
+#### Robot does not move after Nav2 Goal
+
+1. Check that `[lifecycle_manager]: All requested nodes are active` appeared in the log
+2. Check that the 2D Pose Estimate was set and the scan aligns with walls
+3. Check `/cmd_vel` is being published: `ros2 topic hz /cmd_vel` (should increase when goal is set)
+4. Check that the goal was placed in **white** (free) space, not grey (unknown) or black (wall)
+
+#### Map does not appear in RViz2 after 30 seconds
+
+The posegraph is taking too long to deserialize, or the path is wrong. Verify:
+
+```bash
+docker exec dev_unitree_go2 bash -c \
+  "source /env_ros2.sh && ros2 topic echo /map --once"
+# If this hangs → map was never published → check slam_toolbox log for errors
+```
+
+Also verify the posegraph path is correct:
+
+```bash
+grep map_file_name /go2_webrtc_ws/localization_params.yaml
+# Must point to a file that actually exists:
+docker exec dev_unitree_go2 ls /ros2_ws/mapa_garagem1/mapa1.posegraph
+```
+
+#### `bt_navigator [FATAL]: cannot open shared object file`
+
+A plugin listed in `nav2_params.yaml` does not exist in this version of Nav2/Foxy. Remove the offending line from `plugin_lib_names` in `nav2_params.yaml`:
+
+```bash
+nano /go2_webrtc_ws/nav2_params.yaml
+# Find plugin_lib_names under bt_navigator and remove the line with the missing plugin
+```
+
+Restart the pipeline after editing.
+
+#### Laser scan does not align with walls after 2D Pose Estimate
+
+- The robot's physical position or orientation differs too much from what was clicked
+- Try again: place the robot at a clear landmark (corner, pillar) and be precise
+- If the map itself is distorted (common in long corridors), navigation may be unreliable — consider remapping
+
+#### Robot spins in circles or tries to walk through walls
+
+Both symptoms indicate incorrect initial pose. Repeat the **2D Pose Estimate** step with more precision. All Nav2 fault behaviors — spinning, wall collisions, no movement — trace back to either (1) wrong initial pose, (2) distorted map, or (3) control loop overload (reduce `controller_frequency` to `2.0` in `nav2_params.yaml`).
+
+#### `map_file_name` or `yaml_filename` errors in log
+
+You changed the map folder but forgot to update one of the three files. Check all three:
+
+```bash
+grep MAP_FILE /go2_webrtc_ws/nav_pipeline_navigation.sh
+grep map_file_name /go2_webrtc_ws/localization_params.yaml
+grep yaml_filename /go2_webrtc_ws/nav2_params.yaml
+```
+
+All three must point to the same map, consistently (see [Section 11.4](#114-what-to-change-when-using-a-new-map-folder)).
+
+---
+
+## 12. Segmented Mapping (Large Environments)
 
 For large environments like parking garages, long corridors, power plants, or multi-floor buildings, it is often impractical to map everything in a single continuous run. The robot may need to be physically repositioned (picked up and turned) between straight-line segments. This section describes a **segmented mapping workflow** that splits the mapping session into manageable segments while building a single accumulated map.
 
-### 11.1 How Segmented Mapping Works
+### 12.1 How Segmented Mapping Works
 
 The `slam_toolbox` serialization saves the **entire accumulated map** at the time of the call — not just the new portion. This is the key concept:
 
@@ -1202,7 +1625,7 @@ Each saved file is a **complete snapshot** of everything mapped so far. You alwa
 
 > 💡 **Between segments:** Stop the pipeline (`Ctrl+C`), physically reposition the robot (pick it up, turn it to face the next corridor), then restart the pipeline loading the previous segment. The SLAM node will resume from where the map left off.
 
-### 11.2 Scripts Overview
+### 12.2 Scripts Overview
 
 Two scripts handle the segmented workflow. Both live in `/go2_webrtc_ws/` and follow the same structure as `slam_pipeline.sh` — configurable variables at the top, same node launch pattern.
 
@@ -1211,7 +1634,7 @@ Two scripts handle the segmented workflow. Both live in `/go2_webrtc_ws/` and fo
 | `slam_pipeline_segments.sh` | Starts the full pipeline for a given segment number. If segment=1, starts from scratch. If segment>1, loads the previous segment's map and continues. |
 | `salvar_segmento.sh` | Saves the current SLAM state as the specified segment number. |
 
-### 11.3 `slam_pipeline_segments.sh`
+### 12.3 `slam_pipeline_segments.sh`
 
 Create the script inside the container:
 
@@ -1390,7 +1813,7 @@ Save with `Ctrl+O`, `Enter`, `Ctrl+X`. Then make it executable:
 chmod +x /go2_webrtc_ws/slam_pipeline_segments.sh
 ```
 
-### 11.4 `salvar_segmento.sh`
+### 12.4 `salvar_segmento.sh`
 
 Create the save script:
 
@@ -1455,7 +1878,7 @@ Save and make executable:
 chmod +x /go2_webrtc_ws/salvar_segmento.sh
 ```
 
-### 11.5 Step-by-Step Workflow
+### 12.5 Step-by-Step Workflow
 
 This example maps a parking garage in 6 straight-line segments. Between each segment, the robot is physically picked up and turned to face the next corridor.
 
@@ -1530,7 +1953,7 @@ source /env_ros2.sh
 ros2 run nav2_map_server map_saver_cli -f /ros2_ws/garagem_segmentos/mapa_final
 ```
 
-### 11.6 Customizing Parameters
+### 12.6 Customizing Parameters
 
 All tuning parameters are defined as variables at the top of `slam_pipeline_segments.sh`. Edit the file to adjust for your environment:
 
@@ -1552,7 +1975,7 @@ nano /go2_webrtc_ws/slam_pipeline_segments.sh
 
 > 💡 These defaults are tuned for **parking garages and large indoor corridors** (`min_height:=0.5`, `max_height:=0.8`). For other environments, refer to the [Environment Profiles](#62-environment-profiles) in the LiDAR Tuning Guide.
 
-### 11.7 File Structure
+### 12.7 File Structure
 
 After mapping 6 segments, the output directory looks like:
 
@@ -1580,13 +2003,13 @@ After mapping 6 segments, the output directory looks like:
 
 ---
 
-## 12. YAML Parameter Reference — Advanced Tuning
+## 13. YAML Parameter Reference — Advanced Tuning
 
 This section documents all parameters in `mapper_params_online_async.yaml`, explaining what each one does and why it matters for industrial environments. The YAML-Tuned pipeline (Section 4.4) uses this file instead of the 6 inline parameters.
 
 > **After any YAML change, restart the pipeline.** The file is read only at startup.
 
-### 12.1 Why the YAML Mode Matters
+### 13.1 Why the YAML Mode Matters
 
 The base `slam_pipeline.sh` passes only 6 parameters to slam_toolbox via `--ros-args -p`. All other parameters use internal defaults set inside the slam_toolbox package — defaults designed for general robotics use, not for specific industrial scenarios.
 
@@ -1601,7 +2024,7 @@ The critical missing parameters were:
 
 These four parameters alone explain most of the rotational drift observed in parking garage and power plant corridors.
 
-### 12.2 Frames and Topics
+### 13.2 Frames and Topics
 
 ```yaml
 odom_frame: odom          # Must match go2_driver's odometry frame — do not change
@@ -1613,7 +2036,7 @@ mode: mapping             # mapping = build new map | localization = use existin
 map_start_pose: [0.0, 0.0, 0.0]  # Robot's starting position in the map
 ```
 
-### 12.3 Map Quality
+### 13.3 Map Quality
 
 ```yaml
 resolution: 0.05
@@ -1632,7 +2055,7 @@ stack_size_to_use: 40000000
 # Increase if you get stack overflow errors on very large maps (>500m corridors).
 ```
 
-### 12.4 Scan Insertion
+### 13.4 Scan Insertion
 
 ```yaml
 throttle_scans: 1
@@ -1666,7 +2089,7 @@ tf_buffer_duration: 30.0
 # How long to keep TF history in the buffer (seconds).
 ```
 
-### 12.5 Angular Drift Correction — Critical Parameters
+### 13.5 Angular Drift Correction — Critical Parameters
 
 These are the most important parameters for industrial environments with smooth floors, long corridors, and turns where the robot's paws may slip.
 
@@ -1712,7 +2135,7 @@ minimum_distance_penalty: 0.5
 # Minimum acceptable linear match quality (0–1 scale).
 ```
 
-### 12.6 Scan Matching Correlation Space
+### 13.6 Scan Matching Correlation Space
 
 These parameters define the search space used to align a new scan against the current map.
 
@@ -1747,7 +2170,7 @@ scan_buffer_maximum_scan_distance: 10.0
 # Maximum distance between scans in the buffer.
 ```
 
-### 12.7 Loop Closure
+### 13.7 Loop Closure
 
 Loop closure detects when the robot returns to a previously mapped location and corrects accumulated drift by snapping the map together.
 
@@ -1790,7 +2213,7 @@ loop_search_space_smear_deviation: 0.03
 # Gaussian blur for loop closure matching (tighter than local matching).
 ```
 
-### 12.8 Solver (Ceres)
+### 13.8 Solver (Ceres)
 
 The Ceres solver optimizes the pose graph — the collection of robot positions connected by scan matches.
 
@@ -1813,7 +2236,7 @@ ceres_loss_function: None
 
 > Do not change these unless you have specific nonlinear optimization expertise.
 
-### 12.9 Response Expansion
+### 13.9 Response Expansion
 
 ```yaml
 use_response_expansion: true
@@ -1827,7 +2250,7 @@ use_response_expansion: true
 # With it, SLAM searches more aggressively before giving up.
 ```
 
-### 12.10 Complete YAML — Power Plant Profile
+### 13.10 Complete YAML — Power Plant Profile
 
 Ready to use for Usina / Power Plant environments. Copy this to `/go2_webrtc_ws/mapper_params_online_async.yaml`:
 
@@ -1904,7 +2327,7 @@ slam_toolbox:
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 ### `/scan` frequency too low (< 2 Hz when robot is stationary)
 
